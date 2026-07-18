@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+.env
+*.db
+/data/
+chroma/
+credentials.json
+token.json
+
+.DS_Store

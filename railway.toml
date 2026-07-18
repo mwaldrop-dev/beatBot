@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python main.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Mount a Railway Volume at /data for persistent ChromaDB + SQLite storage.
+# In the Railway dashboard: Add Volume → Mount Path = /data
