@@ -14,6 +14,7 @@ NEWSLETTER_SUBJECT_KEYWORD = os.getenv("NEWSLETTER_SUBJECT_KEYWORD", "")
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
 SLACK_ANNOUNCE_CHANNEL = os.environ["SLACK_ANNOUNCE_CHANNEL"]
+ADMIN_SLACK_USER_IDS = [u.strip() for u in os.getenv("ADMIN_SLACK_USER_IDS", "").split(",") if u.strip()]
 
 # Gemini
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]

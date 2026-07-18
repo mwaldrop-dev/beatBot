@@ -4,6 +4,7 @@ Embeds newsletter chunks and retrieves relevant passages for Q&A.
 """
 
 import email.utils
+import hashlib
 import logging
 import os
 import re
@@ -17,6 +18,7 @@ from google.genai import types
 
 from src.calendar_client import CALENDAR_TZ, CalendarEvent, event_url, format_event_date
 from src.config import GEMINI_API_KEY, CHROMA_PATH, CALENDAR_INFO_URL
+from src.newsletter_parser import _chunk_text
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,43 @@ class VectorStore:
         )
         return len(results["ids"]) > 0
 
+    def add_manual_entry(self, title: str, url: str, body: str) -> int:
+        """
+        Index an ad-hoc admin-provided note (e.g. pasted from an email or
+        flyer) alongside newsletters and calendar events. Keyed by title,
+        so re-adding the same title overwrites the old content — the
+        expected way to fix a typo'd entry, matching how calendar events
+        are upserted by identity rather than accumulated as new copies.
+        """
+        chunks = _chunk_text(body)
+        if not chunks:
+            return 0
+
+        entry_id = hashlib.sha256(title.strip().lower().encode()).hexdigest()[:16]
+        date_str = datetime.now().strftime("%A, %B %d, %Y")
+
+        ids = [f"manual_{entry_id}_{i}" for i in range(len(chunks))]
+        metadatas = [
+            {
+                "source": "manual",
+                "gmail_id": f"manual_{entry_id}",
+                "subject": title,
+                "url": url,
+                "date": date_str,
+                "chunk_index": i,
+                "season_start_year": _season_start_year(datetime.now()),
+            }
+            for i in range(len(chunks))
+        ]
+
+        # Delete-then-add rather than upsert: if a correction has a
+        # different chunk count than the original, upserting by index
+        # would leave the extra old chunks behind as stale duplicates.
+        self._collection.delete(where={"gmail_id": f"manual_{entry_id}"})
+        self._collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+        logger.info(f"Stored {len(chunks)} manual chunk(s): {title!r}")
+        return len(chunks)
+
     def sync_calendar_events(self, events: list[CalendarEvent]):
         """
         Upsert calendar events into the vector store (unlike newsletters,
@@ -246,7 +285,7 @@ class VectorStore:
         scope_to_season = not _looks_historical(question)
 
         docs, metas, distances = [], [], []
-        for source in ("newsletter", "calendar"):
+        for source in ("newsletter", "calendar", "manual"):
             d, m, dist = self._query_source(query_embedding, source, current_season, scope_to_season)
             docs.extend(d)
             metas.extend(m)
@@ -272,7 +311,7 @@ class VectorStore:
             date = meta.get("date", "")
             url = meta.get("url", "")
             source_key = meta.get("gmail_id", "")
-            source_label = "Calendar" if meta.get("source") == "calendar" else "Newsletter"
+            source_label = {"calendar": "Calendar", "manual": "Note"}.get(meta.get("source"), "Newsletter")
 
             context_parts.append(
                 f"[{source_label}: {subject} ({date})]\n{doc}"
@@ -301,7 +340,7 @@ references in the question and excerpts (e.g. "this week", "last year",
 explain this reasoning or mention today's date in your answer; just give
 the resolved answer directly.
 Answer the following question using ONLY the excerpts provided below, which
-come from either the newsletter archive or the band calendar.
+come from the newsletter archive, the band calendar, or additional notes.
 Be concise and specific. If the answer isn't in the excerpts, say so honestly.
 If times, dates, or locations are mentioned, highlight them clearly.
 

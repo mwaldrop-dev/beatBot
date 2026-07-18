@@ -15,7 +15,7 @@ import re
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from src.config import SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ANNOUNCE_CHANNEL
+from src.config import SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ANNOUNCE_CHANNEL, ADMIN_SLACK_USER_IDS
 from src.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,9 @@ QUESTION_WORDS = (
     "who", "what", "when", "where", "why", "how", "is", "are", "can",
     "could", "do", "does", "did", "will", "would", "should", "any",
 )
+
+ADD_PATTERN = re.compile(r"^add:\s*(.+)", re.IGNORECASE)
+URL_LINE_PATTERN = re.compile(r"^url:\s*(\S+)", re.IGNORECASE)
 
 
 def _looks_like_question(text: str) -> bool:
@@ -125,6 +128,43 @@ def _handle_question(question: str, say, thread_ts=None):
         say(answer, thread_ts=thread_ts)
 
 
+def _handle_add_command(text: str, user_id: str, say):
+    """
+    Admin-only: DM the bot `add: <title>` on the first line, optionally
+    `url: <link>` on the next, then the content on the rest — indexes it
+    into the same searchable archive as newsletters and calendar events.
+    """
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        say("Sorry, only the bot admin can add entries to the knowledge base.")
+        return
+
+    lines = text.split("\n")
+    title = ADD_PATTERN.match(lines[0]).group(1).strip()
+
+    remaining = lines[1:]
+    url = ""
+    if remaining:
+        url_match = URL_LINE_PATTERN.match(remaining[0].strip())
+        if url_match:
+            url = url_match.group(1)
+            remaining = remaining[1:]
+
+    body = "\n".join(remaining).strip()
+    if not body:
+        say(
+            "Got a title but no content to add — send `add: Title` on the "
+            "first line, optionally `url: <link>` on the next, then the "
+            "details on the following line(s)."
+        )
+        return
+
+    chunk_count = get_vector_store().add_manual_entry(title=title, url=url, body=body)
+    confirmation = f":white_check_mark: Added *{title}* to the knowledge base ({chunk_count} chunk(s))."
+    if url:
+        confirmation += f"\n<{url}|Reference link>"
+    say(confirmation)
+
+
 @app.event("app_mention")
 def handle_mention(event, say):
     """User @-mentioned the bot in a channel."""
@@ -153,7 +193,10 @@ def handle_message(event, say):
     question = raw_text.strip()
 
     if event.get("channel_type") == "im":
-        _handle_question(question, say)
+        if ADD_PATTERN.match(question):
+            _handle_add_command(question, event.get("user", ""), say)
+        else:
+            _handle_question(question, say)
         return
 
     if event.get("channel") == SLACK_ANNOUNCE_CHANNEL and _looks_like_question(question):

@@ -82,6 +82,9 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 - In Slack, right-click the channel → View channel details → scroll to bottom → Copy channel ID (`C0XXXXXXXXX`) → `SLACK_ANNOUNCE_CHANNEL`
 - Make sure to **invite the bot** to that channel: `/invite @BandNewsletterBot`
 
+**Get your Slack user ID** (for `ADMIN_SLACK_USER_IDS`, see [Usage](#adding-ad-hoc-notes) below):
+- Click your profile picture → View profile → **More** (⋯) → **Copy member ID**
+
 ### 4. Gemini API Key
 
 - [aistudio.google.com](https://aistudio.google.com) → Get API key → Create API key → `GEMINI_API_KEY`
@@ -118,6 +121,7 @@ This only works for calendars set to "public" sharing — if the feed returns an
 | `SLACK_BOT_TOKEN` | `xoxb-...` from step 3 |
 | `SLACK_APP_TOKEN` | `xapp-...` from step 3 |
 | `SLACK_ANNOUNCE_CHANNEL` | `C0XXXXXXXXX` from step 3 |
+| `ADMIN_SLACK_USER_IDS` | your Slack member ID from step 3 (optional, comma-separated for multiple admins) |
 | `GEMINI_API_KEY` | from step 4 |
 | `CALENDAR_ICAL_URLS` | from step 5 (optional, comma-separated) |
 | `CALENDAR_INFO_URL` | from step 5 (optional) |
@@ -148,6 +152,18 @@ Just message the bot directly — no mention needed.
 
 ### Help
 Send `help` or `?` to the bot.
+
+### Adding ad-hoc notes
+
+For one-off info that isn't in a newsletter or the calendar (an email from a coach, a flyer, a form), any admin listed in `ADMIN_SLACK_USER_IDS` can DM the bot:
+
+```
+add: Uniform Fitting Day
+url: https://yourschool.membershiptoolkit.com/story/somepage
+All students need $40 cash or check for uniform fitting on Saturday, August 8, 3-6pm in the band room.
+```
+
+The `url:` line is optional — include it to give the entry a clickable reference link in answers; omit it for something with no link to point to. Re-sending `add:` with the same title overwrites that entry (handy for fixing a typo), rather than creating a duplicate.
 
 ---
 
