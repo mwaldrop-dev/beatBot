@@ -209,9 +209,11 @@ class VectorStore:
         today_str = datetime.now().strftime("%A, %B %d, %Y")
 
         prompt = f"""You are a helpful assistant for a high school band program.
-Today's date is {today_str}. Use this to correctly reason about relative
-time references in the question and excerpts (e.g. "this week", "last
-year", "next game") — do not guess or assume which year is "current".
+Today's date is {today_str}. Use this silently to resolve relative time
+references in the question and excerpts (e.g. "this week", "last year",
+"next game") — do not guess or assume which year is "current". Do not
+explain this reasoning or mention today's date in your answer; just give
+the resolved answer directly.
 Answer the following question using ONLY the newsletter excerpts provided below.
 Be concise and specific. If the answer isn't in the excerpts, say so honestly.
 If times, dates, or locations are mentioned, highlight them clearly.
