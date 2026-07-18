@@ -255,6 +255,15 @@ class VectorStore:
         if not docs:
             return "I couldn't find anything relevant in the newsletters or calendar for that question."
 
+        # Sort by relevance across both sources combined (ascending distance
+        # = most similar first). Without this, newsletter results — always
+        # queried first above — fill the citation list's truncation below
+        # before a more-relevant calendar result is ever reached.
+        order = sorted(range(len(docs)), key=lambda i: distances[i])
+        docs = [docs[i] for i in order]
+        metas = [metas[i] for i in order]
+        distances = [distances[i] for i in order]
+
         # Build context block for GPT
         context_parts = []
         sources_seen = set()
