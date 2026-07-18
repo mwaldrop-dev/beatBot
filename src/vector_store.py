@@ -15,7 +15,7 @@ from chromadb.utils import embedding_functions
 from google import genai
 from google.genai import types
 
-from src.calendar_client import CALENDAR_TZ, CalendarEvent, format_event_date
+from src.calendar_client import CALENDAR_TZ, CalendarEvent, event_url, format_event_date
 from src.config import GEMINI_API_KEY, CHROMA_PATH, CALENDAR_INFO_URL
 
 logger = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ class VectorStore:
                     "source": "calendar",
                     "gmail_id": event_id,
                     "subject": e.summary or e.calendar_name,
-                    "url": CALENDAR_INFO_URL,
+                    "url": event_url(e) or CALENDAR_INFO_URL,
                     "date": date_str,
                     "chunk_index": 0,
                     # Use local calendar-day, not UTC, so events near
