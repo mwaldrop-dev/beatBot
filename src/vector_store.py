@@ -343,6 +343,9 @@ Answer the following question using ONLY the excerpts provided below, which
 come from the newsletter archive, the band calendar, or additional notes.
 Be concise and specific. If the answer isn't in the excerpts, say so honestly.
 If times, dates, or locations are mentioned, highlight them clearly.
+If the calendar and newsletter excerpts describe the same event
+differently (a different date, time, or location), do not silently pick
+one — explicitly flag the discrepancy so the reader knows to double check.
 
 QUESTION: {question}
 
