@@ -15,15 +15,21 @@ from chromadb.utils import embedding_functions
 from google import genai
 from google.genai import types
 
-from src.config import GEMINI_API_KEY, CHROMA_PATH
+from src.calendar_client import CALENDAR_TZ, CalendarEvent, format_event_date
+from src.config import GEMINI_API_KEY, CHROMA_PATH, CALENDAR_INFO_URL
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "newsletters"
 EMBED_MODEL = "gemini-embedding-001"
 QA_MODEL = "gemini-flash-latest"
-TOP_K = 5  # Number of chunks to retrieve per question
 GEMINI_API_KEY_ENV_VAR = "GEMINI_API_KEY"
+EMBED_BATCH_SIZE = 100  # Gemini's batch embedding endpoint's per-call cap
+
+# Retrieved separately per source (rather than one combined top-K ranking)
+# so a cluster of near-duplicate calendar entries (e.g. one per band camp
+# day) can't crowd newsletter prose out of the context entirely.
+SOURCE_TOP_K = 4
 
 # The band's newsletter year runs April 1 -> March 31. Most questions mean
 # "this season" implicitly, so retrieval defaults to it and only widens to
@@ -112,6 +118,7 @@ class VectorStore:
         ids = [f"{gmail_id}_{i}" for i in range(len(chunks))]
         metadatas = [
             {
+                "source": "newsletter",
                 "gmail_id": gmail_id,
                 "subject": subject,
                 "url": url,
@@ -138,6 +145,91 @@ class VectorStore:
         )
         return len(results["ids"]) > 0
 
+    def sync_calendar_events(self, events: list[CalendarEvent]):
+        """
+        Upsert calendar events into the vector store (unlike newsletters,
+        events can be edited in place — e.g. a game time changing — so this
+        always overwrites by UID), and remove any previously-indexed events
+        that no longer exist in the fetched set (cancelled/deleted).
+        """
+        if not events:
+            return
+
+        # UID alone isn't a unique key: recurring events can have multiple
+        # VEVENT components (recurrence exceptions) sharing the same UID
+        # with different start times. Keying by dict also absorbs any exact
+        # duplicate entries a feed might contain.
+        by_id = {}
+        for e in events:
+            event_id = f"cal_{e.uid}_{int(e.start.timestamp())}"
+            date_str = format_event_date(e)
+            parts = [f"{e.summary} — {date_str}"]
+            if e.location:
+                parts.append(f"Location: {e.location}")
+            if e.description:
+                parts.append(e.description)
+            by_id[event_id] = {
+                "document": "\n".join(parts),
+                "metadata": {
+                    "source": "calendar",
+                    "gmail_id": event_id,
+                    "subject": e.summary or e.calendar_name,
+                    "url": CALENDAR_INFO_URL,
+                    "date": date_str,
+                    "chunk_index": 0,
+                    # Use local calendar-day, not UTC, so events near
+                    # midnight don't get misfiled across the April 1 cutoff.
+                    "season_start_year": _season_start_year(e.start.astimezone(CALENDAR_TZ)),
+                },
+            }
+
+        ids = list(by_id.keys())
+        documents = [v["document"] for v in by_id.values()]
+        metadatas = [v["metadata"] for v in by_id.values()]
+
+        # Gemini's batch embedding endpoint caps at 100 requests per call.
+        for i in range(0, len(ids), EMBED_BATCH_SIZE):
+            self._collection.upsert(
+                ids=ids[i:i + EMBED_BATCH_SIZE],
+                documents=documents[i:i + EMBED_BATCH_SIZE],
+                metadatas=metadatas[i:i + EMBED_BATCH_SIZE],
+            )
+
+        existing = self._collection.get(where={"source": "calendar"}, include=[])
+        stale_ids = set(existing["ids"]) - set(ids)
+        if stale_ids:
+            self._collection.delete(ids=list(stale_ids))
+            logger.info(f"Removed {len(stale_ids)} stale calendar event(s)")
+
+        logger.info(f"Synced {len(events)} calendar event(s)")
+
+    def _query_source(
+        self, query_embedding, source: str, current_season: int, scope_to_season: bool
+    ):
+        """Query one source (newsletter/calendar) for its own top-K, with the
+        same season-scoping + full-archive fallback as the overall search."""
+        source_filter = {"source": source}
+        where = (
+            {"$and": [source_filter, {"season_start_year": current_season}]}
+            if scope_to_season else source_filter
+        )
+        results = self._collection.query(
+            query_embeddings=[query_embedding],
+            n_results=SOURCE_TOP_K,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+        docs = results["documents"][0]
+        if not docs and scope_to_season:
+            results = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=SOURCE_TOP_K,
+                where=source_filter,
+                include=["documents", "metadatas", "distances"],
+            )
+            docs = results["documents"][0]
+        return docs, results["metadatas"][0], results["distances"][0]
+
     def answer_question(self, question: str) -> str:
         """
         Retrieve the most relevant newsletter chunks and ask GPT to answer the question.
@@ -153,31 +245,15 @@ class VectorStore:
         current_season = _season_start_year(datetime.now())
         scope_to_season = not _looks_historical(question)
 
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=TOP_K,
-            where={"season_start_year": current_season} if scope_to_season else None,
-            include=["documents", "metadatas", "distances"],
-        )
-
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        distances = results["distances"][0]
-
-        if not docs and scope_to_season:
-            # Nothing from this season yet (e.g. early in a new one) — fall
-            # back to the full archive rather than saying nothing was found.
-            results = self._collection.query(
-                query_embeddings=[query_embedding],
-                n_results=TOP_K,
-                include=["documents", "metadatas", "distances"],
-            )
-            docs = results["documents"][0]
-            metas = results["metadatas"][0]
-            distances = results["distances"][0]
+        docs, metas, distances = [], [], []
+        for source in ("newsletter", "calendar"):
+            d, m, dist = self._query_source(query_embedding, source, current_season, scope_to_season)
+            docs.extend(d)
+            metas.extend(m)
+            distances.extend(dist)
 
         if not docs:
-            return "I couldn't find anything relevant in the newsletters for that question."
+            return "I couldn't find anything relevant in the newsletters or calendar for that question."
 
         # Build context block for GPT
         context_parts = []
@@ -187,9 +263,10 @@ class VectorStore:
             date = meta.get("date", "")
             url = meta.get("url", "")
             source_key = meta.get("gmail_id", "")
+            source_label = "Calendar" if meta.get("source") == "calendar" else "Newsletter"
 
             context_parts.append(
-                f"[From: {subject} ({date})]\n{doc}"
+                f"[{source_label}: {subject} ({date})]\n{doc}"
             )
             if source_key not in sources_seen:
                 sources_seen.add(source_key)
@@ -201,9 +278,9 @@ class VectorStore:
         for meta in metas:
             key = meta.get("gmail_id", "")
             if key in sources_seen:
-                source_lines.append(
-                    f"• {meta.get('subject', 'Newsletter')} — <{meta.get('url', '')}|View>"
-                )
+                subject = meta.get("subject", "Newsletter")
+                url = meta.get("url", "")
+                source_lines.append(f"• {subject} — <{url}|View>" if url else f"• {subject}")
                 sources_seen.discard(key)
 
         today_str = datetime.now().strftime("%A, %B %d, %Y")
@@ -214,13 +291,14 @@ references in the question and excerpts (e.g. "this week", "last year",
 "next game") — do not guess or assume which year is "current". Do not
 explain this reasoning or mention today's date in your answer; just give
 the resolved answer directly.
-Answer the following question using ONLY the newsletter excerpts provided below.
+Answer the following question using ONLY the excerpts provided below, which
+come from either the newsletter archive or the band calendar.
 Be concise and specific. If the answer isn't in the excerpts, say so honestly.
 If times, dates, or locations are mentioned, highlight them clearly.
 
 QUESTION: {question}
 
-NEWSLETTER EXCERPTS:
+EXCERPTS:
 {context}
 """
 

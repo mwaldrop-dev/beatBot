@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src import database as db
+from src.calendar_client import fetch_all_events
 from src.gmail_client import GmailClient
 from src.newsletter_parser import fetch_and_parse
 from src.vector_store import VectorStore
@@ -98,6 +99,15 @@ def poll_and_ingest():
         )
     else:
         db.set_last_poll_time(now)
+
+    # Calendar sync is independent of the newsletter checkpoint above — a
+    # failure here shouldn't block newsletter processing or vice versa.
+    try:
+        events = fetch_all_events()
+        vs.sync_calendar_events(events)
+    except Exception as e:
+        logger.error(f"Calendar sync failed: {e}")
+
     logger.info("=== Newsletter poll complete ===")
 
 

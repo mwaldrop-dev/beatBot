@@ -18,6 +18,11 @@ SLACK_ANNOUNCE_CHANNEL = os.environ["SLACK_ANNOUNCE_CHANNEL"]
 # Gemini
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
+# Calendar (optional — public Google Calendar iCal feeds, comma-separated)
+CALENDAR_ICAL_URLS = [u.strip() for u in os.getenv("CALENDAR_ICAL_URLS", "").split(",") if u.strip()]
+CALENDAR_INFO_URL = os.getenv("CALENDAR_INFO_URL", "")
+CALENDAR_TIMEZONE = os.getenv("CALENDAR_TIMEZONE", "America/New_York")
+
 # Storage
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 DB_PATH = os.path.join(DATA_DIR, "newsletters.db")

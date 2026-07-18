@@ -15,9 +15,13 @@ Gmail (new newsletter email)
                  ├─ Record in SQLite (dedup tracking)
                  └─ Announce in Slack → #band-news
 
+Band calendar (public Google Calendar iCal feeds)
+  └─ Fetch + parse events every poll cycle
+       └─ Upsert into the same ChromaDB collection (by event UID)
+
 Slack user asks a question
   └─ Embed the question (Gemini)
-       └─ Retrieve top matching chunks from ChromaDB
+       └─ Retrieve top matching chunks from ChromaDB (newsletters + calendar)
             └─ Gemini generates answer
                  └─ Reply in Slack with sources
 ```
@@ -84,7 +88,18 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 - The bot uses `gemini-embedding-001` for embeddings and `gemini-flash-latest` for Q&A.
 - Estimated cost: under $1/month for typical newsletter volume.
 
-### 5. Deploy on Railway
+### 5. Band Calendar (optional)
+
+If your program publishes a public Google Calendar (e.g. embedded on a Membership Toolkit page), the bot can pull events into its answers too:
+
+1. Find the embedded calendar's `src` value: open the page with the calendar, view page source, and search for `calendar.google.com/calendar/embed?src=`. The value after `src=` (URL-decode the `%40` back to `@`) is the calendar ID, like `abc123...@group.calendar.google.com`.
+2. Build the public iCal feed URL: `https://calendar.google.com/calendar/ical/<calendar-id>/public/basic.ics`
+3. If there are multiple calendars (e.g. marching band, concert band, guard), repeat for each and join them with commas in `CALENDAR_ICAL_URLS`.
+4. Optionally set `CALENDAR_INFO_URL` to the page where people can view the calendar themselves (used as the source link in Slack), and `CALENDAR_TIMEZONE` if your program isn't in `America/New_York`.
+
+This only works for calendars set to "public" sharing — if the feed returns an error, the calendar owner needs to enable public access in the Google Calendar's sharing settings.
+
+### 6. Deploy on Railway
 
 1. Push this repo to GitHub
 2. In Railway: **New Project** → Deploy from GitHub repo → select this repo
@@ -104,6 +119,9 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 | `SLACK_APP_TOKEN` | `xapp-...` from step 3 |
 | `SLACK_ANNOUNCE_CHANNEL` | `C0XXXXXXXXX` from step 3 |
 | `GEMINI_API_KEY` | from step 4 |
+| `CALENDAR_ICAL_URLS` | from step 5 (optional, comma-separated) |
+| `CALENDAR_INFO_URL` | from step 5 (optional) |
+| `CALENDAR_TIMEZONE` | from step 5 (optional, defaults to `America/New_York`) |
 | `DATA_DIR` | `/data` |
 
 5. Deploy — Railway will install dependencies and start the bot automatically.
@@ -120,8 +138,10 @@ When a new newsletter email arrives, the bot automatically posts to your announc
 > *You can ask me questions about it — just mention me in this channel or send me a DM!*
 
 ### Q&A in a channel
-Mention the bot:
+Mention the bot anywhere:
 > `@BandBot what is call time for Friday's game?`
+
+In `SLACK_ANNOUNCE_CHANNEL` specifically, no mention is needed — just ask a question-like message directly and the bot replies in a thread.
 
 ### Q&A via direct message
 Just message the bot directly — no mention needed.
