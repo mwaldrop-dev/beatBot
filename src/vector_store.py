@@ -159,6 +159,11 @@ NEWSLETTER EXCERPTS:
             config=types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=500,
+                # This is a plain extractive RAG answer, not a reasoning task.
+                # Without this, the model's internal "thinking" tokens can eat
+                # the whole max_output_tokens budget, truncating the visible
+                # answer mid-sentence (reproduced against the real archive).
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
