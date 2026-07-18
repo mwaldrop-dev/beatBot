@@ -43,6 +43,9 @@ class ParsedNewsletter:
 
 def _is_noise_element(tag) -> bool:
     """Return True if a tag looks like navigation / boilerplate."""
+    if tag.attrs is None:
+        # Already decomposed as a descendant of an earlier noise match.
+        return False
     for attr in ("class", "id"):
         value = " ".join(tag.get(attr, []) if attr == "class" else [tag.get(attr, "")])
         if NOISE_PATTERNS.search(value):

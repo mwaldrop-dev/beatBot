@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "newsletters"
 EMBED_MODEL = "gemini-embedding-001"
-QA_MODEL = "gemini-2.5-flash"
+QA_MODEL = "gemini-flash-latest"
 TOP_K = 5  # Number of chunks to retrieve per question
 GEMINI_API_KEY_ENV_VAR = "GEMINI_API_KEY"
 

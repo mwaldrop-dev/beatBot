@@ -81,7 +81,7 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 ### 4. Gemini API Key
 
 - [aistudio.google.com](https://aistudio.google.com) → Get API key → Create API key → `GEMINI_API_KEY`
-- The bot uses `gemini-embedding-001` for embeddings and `gemini-2.5-flash` for Q&A.
+- The bot uses `gemini-embedding-001` for embeddings and `gemini-flash-latest` for Q&A.
 - Estimated cost: under $1/month for typical newsletter volume.
 
 ### 5. Deploy on Railway
@@ -149,13 +149,12 @@ python main.py
 
 ## Backfilling the Newsletter Archive
 
-The bot only indexes newsletters received *after* its first deployment. To backfill older newsletters manually, you can temporarily clear the `last_poll_at` value in SQLite:
+Before starting the bot for the first time against an inbox that already has newsletters in it, run:
 
 ```bash
-# On Railway, open a shell in your service and run:
-sqlite3 /data/newsletters.db "DELETE FROM poll_state WHERE key='last_poll_at';"
+python scripts/backfill.py
 ```
 
-Then restart the service — it will fetch all emails from the sender since the beginning of time.
+This indexes every matching newsletter into the vector store (so Q&A works on the full history) and marks them processed, **without** posting a Slack announcement for each one. The normal scheduler will then skip everything already indexed and only announce genuinely new newsletters going forward.
 
 > **Note:** Gmail's API defaults to returning the most recent 500 messages matching your query. For very large archives you may need to adjust the `maxResults` value in `gmail_client.py`.
