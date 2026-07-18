@@ -170,8 +170,9 @@ def handle_mention(event, say):
     """User @-mentioned the bot in a channel."""
     text = event.get("text", "")
     question = MENTION_PATTERN.sub("", text).strip()
-    thread_ts = event.get("thread_ts") or event.get("ts")
-    _handle_question(question, say, thread_ts=thread_ts)
+    # Post as a regular top-level message rather than a thread reply — more
+    # obvious for less Slack-savvy users than a reply tucked into a thread.
+    _handle_question(question, say)
 
 
 @app.event("message")
@@ -200,8 +201,7 @@ def handle_message(event, say):
         return
 
     if event.get("channel") == SLACK_ANNOUNCE_CHANNEL and _looks_like_question(question):
-        thread_ts = event.get("thread_ts") or event.get("ts")
-        _handle_question(question, say, thread_ts=thread_ts)
+        _handle_question(question, say)
 
 
 # ---------------------------------------------------------------------------
