@@ -9,32 +9,43 @@ from typing import Optional
 
 import chromadb
 from chromadb.utils import embedding_functions
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
-from src.config import OPENAI_API_KEY, CHROMA_PATH
+from src.config import GEMINI_API_KEY, CHROMA_PATH
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "newsletters"
-EMBED_MODEL = "text-embedding-3-small"
-QA_MODEL = "gpt-4o-mini"
+EMBED_MODEL = "gemini-embedding-001"
+QA_MODEL = "gemini-2.5-flash"
 TOP_K = 5  # Number of chunks to retrieve per question
+GEMINI_API_KEY_ENV_VAR = "GEMINI_API_KEY"
 
 
 class VectorStore:
     def __init__(self):
         os.makedirs(CHROMA_PATH, exist_ok=True)
         self._client = chromadb.PersistentClient(path=CHROMA_PATH)
-        self._embed_fn = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=OPENAI_API_KEY,
+
+        # Gemini embeddings are asymmetric: documents and queries should be
+        # embedded with different task types for good retrieval quality.
+        self._doc_embed_fn = embedding_functions.GoogleGeminiEmbeddingFunction(
             model_name=EMBED_MODEL,
+            task_type="RETRIEVAL_DOCUMENT",
+            api_key_env_var=GEMINI_API_KEY_ENV_VAR,
+        )
+        self._query_embed_fn = embedding_functions.GoogleGeminiEmbeddingFunction(
+            model_name=EMBED_MODEL,
+            task_type="RETRIEVAL_QUERY",
+            api_key_env_var=GEMINI_API_KEY_ENV_VAR,
         )
         self._collection = self._client.get_or_create_collection(
             name=COLLECTION_NAME,
-            embedding_function=self._embed_fn,
+            embedding_function=self._doc_embed_fn,
             metadata={"hnsw:space": "cosine"},
         )
-        self._openai = OpenAI(api_key=OPENAI_API_KEY)
+        self._genai = genai.Client(api_key=GEMINI_API_KEY)
         logger.info(
             f"VectorStore ready — {self._collection.count()} chunks in collection"
         )
@@ -88,9 +99,11 @@ class VectorStore:
         if self._collection.count() == 0:
             return "I don't have any newsletters in my archive yet. Check back after the next newsletter arrives!"
 
-        # Retrieve relevant chunks
+        # Retrieve relevant chunks. Embed the question with the query-side
+        # embedding function so it matches document embeddings correctly.
+        query_embedding = self._query_embed_fn([question])[0].tolist()
         results = self._collection.query(
-            query_texts=[question],
+            query_embeddings=[query_embedding],
             n_results=min(TOP_K, self._collection.count()),
             include=["documents", "metadatas", "distances"],
         )
@@ -140,14 +153,16 @@ NEWSLETTER EXCERPTS:
 {context}
 """
 
-        response = self._openai.chat.completions.create(
+        response = self._genai.models.generate_content(
             model=QA_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=500,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=500,
+            ),
         )
 
-        answer = response.choices[0].message.content.strip()
+        answer = response.text.strip()
 
         # Append source links
         if source_lines:

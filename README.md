@@ -11,14 +11,14 @@ Gmail (new newsletter email)
   └─ Extract Membership Toolkit URL
        └─ Fetch public newsletter page
             └─ Parse & chunk text
-                 ├─ Store in ChromaDB (semantic search)
+                 ├─ Store in ChromaDB (semantic search, Gemini embeddings)
                  ├─ Record in SQLite (dedup tracking)
                  └─ Announce in Slack → #band-news
 
 Slack user asks a question
-  └─ Embed the question
+  └─ Embed the question (Gemini)
        └─ Retrieve top matching chunks from ChromaDB
-            └─ GPT-4o-mini generates answer
+            └─ Gemini generates answer
                  └─ Reply in Slack with sources
 ```
 
@@ -78,10 +78,10 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 - In Slack, right-click the channel → View channel details → scroll to bottom → Copy channel ID (`C0XXXXXXXXX`) → `SLACK_ANNOUNCE_CHANNEL`
 - Make sure to **invite the bot** to that channel: `/invite @BandNewsletterBot`
 
-### 4. OpenAI API Key
+### 4. Gemini API Key
 
-- [platform.openai.com](https://platform.openai.com) → API Keys → Create new key → `OPENAI_API_KEY`
-- The bot uses `text-embedding-3-small` (very cheap) and `gpt-4o-mini` for Q&A.
+- [aistudio.google.com](https://aistudio.google.com) → Get API key → Create API key → `GEMINI_API_KEY`
+- The bot uses `gemini-embedding-001` for embeddings and `gemini-2.5-flash` for Q&A.
 - Estimated cost: under $1/month for typical newsletter volume.
 
 ### 5. Deploy on Railway
@@ -103,7 +103,7 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 | `SLACK_BOT_TOKEN` | `xoxb-...` from step 3 |
 | `SLACK_APP_TOKEN` | `xapp-...` from step 3 |
 | `SLACK_ANNOUNCE_CHANNEL` | `C0XXXXXXXXX` from step 3 |
-| `OPENAI_API_KEY` | from step 4 |
+| `GEMINI_API_KEY` | from step 4 |
 | `DATA_DIR` | `/data` |
 
 5. Deploy — Railway will install dependencies and start the bot automatically.

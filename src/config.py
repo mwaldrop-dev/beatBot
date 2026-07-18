@@ -15,8 +15,8 @@ SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
 SLACK_ANNOUNCE_CHANNEL = os.environ["SLACK_ANNOUNCE_CHANNEL"]
 
-# OpenAI
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+# Gemini
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 # Storage
 DATA_DIR = os.getenv("DATA_DIR", "./data")
