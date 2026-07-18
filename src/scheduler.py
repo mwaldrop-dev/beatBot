@@ -41,8 +41,7 @@ def poll_and_ingest():
         gmail = GmailClient()
         newsletters = gmail.fetch_new_newsletters(since_timestamp=since)
     except Exception as e:
-        logger.error(f"Gmail fetch failed: {e}")
-        db.set_last_poll_time(now)
+        logger.error(f"Gmail fetch failed: {e} — will retry from the same checkpoint next poll")
         return
 
     logger.info(f"Gmail returned {len(newsletters)} newsletter(s) to process")
@@ -50,6 +49,8 @@ def poll_and_ingest():
 
     # Import here to avoid circular import at module load time
     from src.slack_bot import announce_newsletter
+
+    any_failures = False
 
     for nl in newsletters:
         gmail_id = nl["gmail_id"]
@@ -65,6 +66,7 @@ def poll_and_ingest():
         parsed = fetch_and_parse(url)
         if not parsed:
             logger.warning(f"Could not parse newsletter at {url} — will retry next poll")
+            any_failures = True
             continue
 
         # Index into ChromaDB (skip if already there, e.g. from a previous partial run)
@@ -89,7 +91,13 @@ def poll_and_ingest():
         except Exception as e:
             logger.error(f"Slack announcement failed for {gmail_id!r}: {e}")
 
-    db.set_last_poll_time(now)
+    if any_failures:
+        logger.info(
+            "One or more newsletters failed to parse this poll — not advancing the "
+            "checkpoint so they're retried next time"
+        )
+    else:
+        db.set_last_poll_time(now)
     logger.info("=== Newsletter poll complete ===")
 
 
