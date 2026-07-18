@@ -128,11 +128,6 @@ def _handle_question(question: str, say, thread_ts=None):
 @app.event("app_mention")
 def handle_mention(event, say):
     """User @-mentioned the bot in a channel."""
-    if event.get("channel") == SLACK_ANNOUNCE_CHANNEL:
-        # handle_message covers this channel (mentions included) — skip here
-        # to avoid answering the same message twice.
-        return
-
     text = event.get("text", "")
     question = MENTION_PATTERN.sub("", text).strip()
     thread_ts = event.get("thread_ts") or event.get("ts")
@@ -142,27 +137,26 @@ def handle_mention(event, say):
 @app.event("message")
 def handle_message(event, say):
     """
-    Handle direct messages, and messages in SLACK_ANNOUNCE_CHANNEL.
-    In that channel, an explicit @-mention is always answered; any other
-    message is only answered if it looks like a question, so casual chat
-    and announcements don't get an unrelated reply.
+    Handle direct messages, and question-like messages in
+    SLACK_ANNOUNCE_CHANNEL that don't @-mention the bot (explicit mentions
+    are handled by handle_mention via the app_mention event instead, so
+    they're skipped here to avoid answering twice).
     """
     # Ignore bot messages (including our own "thinking..." edits) to avoid loops
     if event.get("bot_id") or event.get("subtype"):
         return
 
     raw_text = event.get("text", "")
-    is_explicit_mention = bool(MENTION_PATTERN.search(raw_text))
-    question = MENTION_PATTERN.sub("", raw_text).strip()
+    if MENTION_PATTERN.search(raw_text):
+        return
+
+    question = raw_text.strip()
 
     if event.get("channel_type") == "im":
         _handle_question(question, say)
         return
 
-    if event.get("channel") != SLACK_ANNOUNCE_CHANNEL:
-        return
-
-    if is_explicit_mention or _looks_like_question(question):
+    if event.get("channel") == SLACK_ANNOUNCE_CHANNEL and _looks_like_question(question):
         thread_ts = event.get("thread_ts") or event.get("ts")
         _handle_question(question, say, thread_ts=thread_ts)
 
