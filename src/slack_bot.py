@@ -5,8 +5,6 @@ Behaviors:
   - Announces new newsletters to SLACK_ANNOUNCE_CHANNEL
   - Answers Q&A when mentioned (@BandBot what is call time Friday?)
   - Answers Q&A in DMs (just send a message directly)
-  - In SLACK_ANNOUNCE_CHANNEL specifically, answers question-like messages
-    even without an @-mention
   - Responds to "help" with a usage guide
 """
 
@@ -25,24 +23,8 @@ _vector_store: VectorStore | None = None
 
 MENTION_PATTERN = re.compile(r"<@[A-Z0-9]+>")
 
-QUESTION_WORDS = (
-    "who", "what", "when", "where", "why", "how", "is", "are", "can",
-    "could", "do", "does", "did", "will", "would", "should", "any",
-)
-
 ADD_PATTERN = re.compile(r"^add:\s*(.+)", re.IGNORECASE)
 URL_LINE_PATTERN = re.compile(r"^url:\s*(\S+)", re.IGNORECASE)
-
-
-def _looks_like_question(text: str) -> bool:
-    """Heuristic: does this message look like it's asking something?"""
-    stripped = text.strip()
-    if not stripped:
-        return False
-    if "?" in stripped:
-        return True
-    first_word = re.split(r"\W+", stripped.lower(), maxsplit=1)[0]
-    return first_word in QUESTION_WORDS
 
 
 def get_vector_store() -> VectorStore:
@@ -61,8 +43,7 @@ def announce_newsletter(subject: str, url: str, date_str: str):
     text = (
         f":mega: *New Band Newsletter!*\n"
         f"*{subject}*\n"
-        f"<{url}|Read the full newsletter>\n"
-        f"_You can ask me questions about it — just mention me in this channel or send me a DM!_"
+        f"<{url}|Read the full newsletter>"
     )
     try:
         app.client.chat_postMessage(
@@ -178,13 +159,16 @@ def handle_mention(event, say):
 @app.event("message")
 def handle_message(event, say):
     """
-    Handle direct messages, and question-like messages in
-    SLACK_ANNOUNCE_CHANNEL that don't @-mention the bot (explicit mentions
-    are handled by handle_mention via the app_mention event instead, so
-    they're skipped here to avoid answering twice).
+    Handle direct messages only. Channel questions are answered solely via an
+    explicit @-mention (see handle_mention) — the bot never auto-answers
+    un-mentioned messages in a channel.
     """
     # Ignore bot messages (including our own "thinking..." edits) to avoid loops
     if event.get("bot_id") or event.get("subtype"):
+        return
+
+    # Only respond in direct messages; ignore everything else in channels.
+    if event.get("channel_type") != "im":
         return
 
     raw_text = event.get("text", "")
@@ -192,15 +176,9 @@ def handle_message(event, say):
         return
 
     question = raw_text.strip()
-
-    if event.get("channel_type") == "im":
-        if ADD_PATTERN.match(question):
-            _handle_add_command(question, event.get("user", ""), say)
-        else:
-            _handle_question(question, say)
-        return
-
-    if event.get("channel") == SLACK_ANNOUNCE_CHANNEL and _looks_like_question(question):
+    if ADD_PATTERN.match(question):
+        _handle_add_command(question, event.get("user", ""), say)
+    else:
         _handle_question(question, say)
 
 
