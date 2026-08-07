@@ -25,7 +25,7 @@ from src.config import DATA_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
 
 from src import database as db
-from src.scheduler import start_scheduler, poll_and_ingest
+from src.scheduler import start_scheduler, poll_and_ingest, get_vector_store
 from src.slack_bot import start
 
 
@@ -44,6 +44,15 @@ def main():
         poll_and_ingest()
     except Exception as e:
         logger.error(f"Initial poll failed (non-fatal): {e}")
+
+    # Realign stored newsletter/note season tags to the current SEASON_START_MONTH
+    # (idempotent — only rewrites chunks whose season actually changed).
+    try:
+        retagged = get_vector_store().retag_seasons()
+        if retagged:
+            logger.info(f"Re-tagged {retagged} chunk(s) to the current season boundary")
+    except Exception as e:
+        logger.error(f"Season re-tag failed (non-fatal): {e}")
 
     # Start Slack bot — this blocks until the process is killed
     try:

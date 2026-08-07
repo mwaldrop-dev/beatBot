@@ -8,8 +8,8 @@ import hashlib
 import logging
 import os
 import re
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta
+from typing import Optional, Tuple
 
 import chromadb
 from chromadb.utils import embedding_functions
@@ -39,10 +39,10 @@ EMBED_BATCH_SIZE = 100  # Gemini's batch embedding endpoint's per-call cap
 # day) can't crowd newsletter prose out of the context entirely.
 SOURCE_TOP_K = 4
 
-# The band's newsletter year runs April 1 -> March 31. Most questions mean
-# "this season" implicitly, so retrieval defaults to it and only widens to
-# the full archive when the question is clearly asking about the past.
-SEASON_START_MONTH = 4
+# The band's season runs June 1 -> May 31. Most questions mean "this season"
+# implicitly, so retrieval defaults to it and only widens to the full archive
+# when the question is clearly asking about the past.
+SEASON_START_MONTH = 6
 
 HISTORICAL_KEYWORDS = (
     "last year", "last season", "previous year", "previous season",
@@ -61,6 +61,56 @@ def _parse_email_date(date_str: str) -> Optional[datetime]:
         return email.utils.parsedate_to_datetime(date_str)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_stored_date(date_str: str) -> Optional[datetime]:
+    """Parse a chunk's stored `date` — newsletters use RFC-2822 email dates,
+    manual notes use "%A, %B %d, %Y" — for recomputing its season on demand."""
+    parsed = _parse_email_date(date_str)
+    if parsed:
+        return parsed
+    try:
+        return datetime.strptime(date_str, "%A, %B %d, %Y")
+    except (TypeError, ValueError):
+        return None
+
+
+def _detect_window(question: str, now: datetime) -> Optional[Tuple[float, float]]:
+    """If the question is time-scoped (this week, next week, upcoming, next game,
+    …), return the (start_ts, end_ts) unix range to pull calendar events from.
+    None means 'not time-scoped' → fall back to semantic calendar search."""
+    q = question.lower()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def span(start: datetime, end: datetime) -> Tuple[float, float]:
+        return start.timestamp(), end.timestamp()
+
+    if "today" in q or "tonight" in q:
+        return span(today, today + timedelta(days=1))
+    if "tomorrow" in q:
+        d = today + timedelta(days=1)
+        return span(d, d + timedelta(days=1))
+    if "this weekend" in q:
+        sat = today + timedelta(days=(5 - today.weekday()) % 7)
+        return span(sat, sat + timedelta(days=2))
+    if "next week" in q:
+        mon = today + timedelta(days=7 - today.weekday())
+        return span(mon, mon + timedelta(days=7))
+    if "this week" in q:
+        mon = today - timedelta(days=today.weekday())
+        return span(mon, mon + timedelta(days=7))
+    if "next month" in q:
+        first = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+        return span(first, (first + timedelta(days=32)).replace(day=1))
+    if "this month" in q:
+        first = today.replace(day=1)
+        return span(first, (first + timedelta(days=32)).replace(day=1))
+    # "upcoming", "coming up", "what's on the schedule", "next game/rehearsal/…"
+    if any(k in q for k in ("upcoming", "coming up", "what's next", "whats next", "schedule")):
+        return span(today, today + timedelta(days=30))
+    if re.search(r"\bnext\s+(game|rehearsal|practice|competition|event|show|performance|meeting|concert)", q):
+        return span(today, today + timedelta(days=45))
+    return None
 
 
 def _looks_historical(question: str) -> bool:
@@ -222,8 +272,11 @@ class VectorStore:
                     "url": event_url(e) or CALENDAR_INFO_URL,
                     "date": date_str,
                     "chunk_index": 0,
+                    # Unix start time, so time-scoped questions ("next week")
+                    # can retrieve events by date range instead of by embedding.
+                    "start_ts": int(e.start.timestamp()),
                     # Use local calendar-day, not UTC, so events near
-                    # midnight don't get misfiled across the April 1 cutoff.
+                    # midnight don't get misfiled across the June 1 cutoff.
                     "season_start_year": _season_start_year(e.start.astimezone(CALENDAR_TZ)),
                 },
             }
@@ -275,6 +328,50 @@ class VectorStore:
             docs = results["documents"][0]
         return docs, results["metadatas"][0], results["distances"][0]
 
+    def _calendar_in_window(self, start_ts: float, end_ts: float, current_season: int,
+                            scope_to_season: bool, limit: int = 15):
+        """Fetch calendar events whose start falls in [start_ts, end_ts] by date
+        (not embedding), soonest first — so time-scoped questions get the events
+        that are actually in that window. Returns (documents, metadatas)."""
+        conds = [
+            {"source": "calendar"},
+            {"start_ts": {"$gte": int(start_ts)}},
+            {"start_ts": {"$lte": int(end_ts)}},
+        ]
+        if scope_to_season:
+            conds.append({"season_start_year": current_season})
+        got = self._collection.get(where={"$and": conds}, include=["documents", "metadatas"])
+        docs = got.get("documents", []) or []
+        metas = got.get("metadatas", []) or []
+        order = sorted(range(len(docs)), key=lambda i: metas[i].get("start_ts", 0))[:limit]
+        return [docs[i] for i in order], [metas[i] for i in order]
+
+    def retag_seasons(self) -> int:
+        """Recompute season_start_year for stored newsletter/note chunks from
+        their date, so a change to SEASON_START_MONTH takes effect on data that
+        was indexed under the old boundary. Calendar events re-tag themselves on
+        the next sync; this covers the ingest-once sources. Returns # updated."""
+        got = self._collection.get(
+            where={"source": {"$in": ["newsletter", "manual"]}},
+            include=["metadatas"],
+        )
+        ids = got.get("ids", []) or []
+        metas = got.get("metadatas", []) or []
+        upd_ids, upd_metas = [], []
+        for cid, meta in zip(ids, metas):
+            parsed = _parse_stored_date(meta.get("date", ""))
+            if not parsed:
+                continue
+            season = _season_start_year(parsed)
+            if meta.get("season_start_year") != season:
+                new_meta = dict(meta)
+                new_meta["season_start_year"] = season
+                upd_ids.append(cid)
+                upd_metas.append(new_meta)
+        if upd_ids:
+            self._collection.update(ids=upd_ids, metadatas=upd_metas)
+        return len(upd_ids)
+
     def answer_question(self, question: str) -> str:
         """
         Retrieve the most relevant newsletter chunks and ask GPT to answer the question.
@@ -291,8 +388,24 @@ class VectorStore:
         scope_to_season = not _looks_historical(question)
 
         docs, metas, distances = [], [], []
-        for source in ("newsletter", "calendar", "manual"):
+        # Newsletters + notes always come from semantic search. The calendar is
+        # special: for a time-scoped question ("next week", "upcoming", "next
+        # game") we pull events by DATE RANGE (embeddings are date-blind), else
+        # fall back to semantic. Windowed events get distance -1 so they lead.
+        for source in ("newsletter", "manual"):
             d, m, dist = self._query_source(query_embedding, source, current_season, scope_to_season)
+            docs.extend(d)
+            metas.extend(m)
+            distances.extend(dist)
+
+        window = _detect_window(question, datetime.now(CALENDAR_TZ))
+        if window:
+            wdocs, wmetas = self._calendar_in_window(window[0], window[1], current_season, scope_to_season)
+            docs.extend(wdocs)
+            metas.extend(wmetas)
+            distances.extend([-1.0] * len(wdocs))
+        else:
+            d, m, dist = self._query_source(query_embedding, "calendar", current_season, scope_to_season)
             docs.extend(d)
             metas.extend(m)
             distances.extend(dist)
