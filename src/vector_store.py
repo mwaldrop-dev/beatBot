@@ -24,12 +24,13 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "newsletters"
 EMBED_MODEL = "gemini-embedding-001"
-# Pin the model (not a floating "-latest" alias): Gemini 3.x dropped the
-# thinking_budget knob for a thinking_level enum, so "-latest" rolling onto a
-# 3.x model makes the thinking_budget=0 call below fail with 400 INVALID_ARGUMENT.
-# 2.5 Flash still honors thinking_budget=0 (thinking fully off) — ideal for this
-# extractive RAG. If this ID is ever retired, bump to the current stable Flash.
-QA_MODEL = "gemini-2.5-flash"
+# Use the floating alias, not a pinned version: pinned Gemini versions get
+# retired ("no longer available to new users" -> 404), while the alias always
+# resolves to a current, available model. To survive model-generation changes we
+# also send NO thinking_config below (2.5 used thinking_budget, 3.x uses a
+# thinking_level enum — passing the wrong one 400s), and give generateContent a
+# roomy token budget so default "thinking" can't truncate the visible answer.
+QA_MODEL = "gemini-flash-latest"
 GEMINI_API_KEY_ENV_VAR = "GEMINI_API_KEY"
 EMBED_BATCH_SIZE = 100  # Gemini's batch embedding endpoint's per-call cap
 
@@ -363,12 +364,12 @@ EXCERPTS:
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.2,
-                max_output_tokens=500,
-                # This is a plain extractive RAG answer, not a reasoning task.
-                # Without this, the model's internal "thinking" tokens can eat
-                # the whole max_output_tokens budget, truncating the visible
-                # answer mid-sentence (reproduced against the real archive).
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                # Roomy budget so the model's internal "thinking" tokens can't
+                # eat the whole allotment and truncate the visible answer. We
+                # deliberately omit thinking_config: the knob differs by model
+                # generation (2.5 thinking_budget vs 3.x thinking_level), and
+                # sending the wrong one fails with 400 INVALID_ARGUMENT.
+                max_output_tokens=2048,
             ),
         )
 
