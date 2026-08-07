@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "newsletters"
 EMBED_MODEL = "gemini-embedding-001"
-QA_MODEL = "gemini-flash-latest"
+# Pin the model (not a floating "-latest" alias): Gemini 3.x dropped the
+# thinking_budget knob for a thinking_level enum, so "-latest" rolling onto a
+# 3.x model makes the thinking_budget=0 call below fail with 400 INVALID_ARGUMENT.
+# 2.5 Flash still honors thinking_budget=0 (thinking fully off) — ideal for this
+# extractive RAG. If this ID is ever retired, bump to the current stable Flash.
+QA_MODEL = "gemini-2.5-flash"
 GEMINI_API_KEY_ENV_VAR = "GEMINI_API_KEY"
 EMBED_BATCH_SIZE = 100  # Gemini's batch embedding endpoint's per-call cap
 
