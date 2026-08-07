@@ -282,24 +282,44 @@ class VectorStore:
             }
 
         ids = list(by_id.keys())
-        documents = [v["document"] for v in by_id.values()]
-        metadatas = [v["metadata"] for v in by_id.values()]
+
+        # Only (re-)embed events whose text is new or changed. Expanding
+        # recurrences multiplies the event count, and re-embedding every one on
+        # every 15-min poll would be slow and costly. When only metadata changed
+        # (e.g. start_ts added, season re-tag), update it without re-embedding.
+        existing = self._collection.get(where={"source": "calendar"}, include=["documents", "metadatas"])
+        existing_docs = dict(zip(existing["ids"], existing["documents"]))
+        existing_metas = dict(zip(existing["ids"], existing["metadatas"]))
+
+        embed_ids, embed_docs, embed_metas = [], [], []
+        meta_ids, meta_metas = [], []
+        for eid in ids:
+            doc = by_id[eid]["document"]
+            meta = by_id[eid]["metadata"]
+            if existing_docs.get(eid) != doc:
+                embed_ids.append(eid); embed_docs.append(doc); embed_metas.append(meta)
+            elif existing_metas.get(eid) != meta:
+                meta_ids.append(eid); meta_metas.append(meta)
 
         # Gemini's batch embedding endpoint caps at 100 requests per call.
-        for i in range(0, len(ids), EMBED_BATCH_SIZE):
+        for i in range(0, len(embed_ids), EMBED_BATCH_SIZE):
             self._collection.upsert(
-                ids=ids[i:i + EMBED_BATCH_SIZE],
-                documents=documents[i:i + EMBED_BATCH_SIZE],
-                metadatas=metadatas[i:i + EMBED_BATCH_SIZE],
+                ids=embed_ids[i:i + EMBED_BATCH_SIZE],
+                documents=embed_docs[i:i + EMBED_BATCH_SIZE],
+                metadatas=embed_metas[i:i + EMBED_BATCH_SIZE],
             )
+        if meta_ids:
+            self._collection.update(ids=meta_ids, metadatas=meta_metas)
 
-        existing = self._collection.get(where={"source": "calendar"}, include=[])
-        stale_ids = set(existing["ids"]) - set(ids)
+        stale_ids = set(existing_docs) - set(ids)
         if stale_ids:
             self._collection.delete(ids=list(stale_ids))
             logger.info(f"Removed {len(stale_ids)} stale calendar event(s)")
 
-        logger.info(f"Synced {len(events)} calendar event(s)")
+        logger.info(
+            f"Synced {len(events)} calendar event(s) "
+            f"({len(embed_ids)} embedded, {len(meta_ids)} meta-updated)"
+        )
 
     def _query_source(
         self, query_embedding, source: str, current_season: int, scope_to_season: bool

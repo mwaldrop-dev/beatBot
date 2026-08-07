@@ -8,9 +8,10 @@ import base64
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import recurring_ical_events
 import requests
 from icalendar import Calendar
 
@@ -61,10 +62,21 @@ def fetch_all_events() -> list[CalendarEvent]:
         if not calendar_id:
             logger.warning(f"Could not extract calendar ID from {url!r} — event links will fall back to CALENDAR_INFO_URL")
 
+        # Expand recurring events into individual instances across a window that
+        # spans last season through next — plain cal.walk() only yields each
+        # series' first occurrence, dropping every later repeat (e.g. a weekly
+        # Tue/Thu rehearsal would lose all but the first date).
+        now = datetime.now(CALENDAR_TZ)
+        window_start = now - timedelta(days=460)   # ~15 months back
+        window_end = now + timedelta(days=400)     # ~13 months ahead
+        try:
+            components = recurring_ical_events.of(cal).between(window_start, window_end)
+        except Exception as e:
+            logger.error(f"Recurrence expansion failed for {calendar_name!r} ({e}); using raw events")
+            components = [c for c in cal.walk() if c.name == "VEVENT"]
+
         feed_count = 0
-        for component in cal.walk():
-            if component.name != "VEVENT":
-                continue
+        for component in components:
             dtstart = component.get("dtstart")
             uid = str(component.get("uid", ""))
             if not dtstart or not uid:
