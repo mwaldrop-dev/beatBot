@@ -13,8 +13,11 @@ import re
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from datetime import datetime, timedelta
+
 from src.config import SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ANNOUNCE_CHANNEL, ADMIN_SLACK_USER_IDS
 from src.vector_store import VectorStore
+from src import database as db
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,20 @@ HELP_TEXT = (
 )
 
 
-def _handle_question(question: str, say, thread_ts=None):
+# Phrases the bot uses when it has nothing — these mark an info gap in the log.
+NO_ANSWER_MARKERS = (
+    "couldn't find", "could not find", "not in the excerpts", "isn't in the",
+    "is not in the", "don't have any newsletters", "no newsletters in my archive",
+    "ran into an error",
+)
+
+
+def _is_no_answer(answer: str) -> bool:
+    a = (answer or "").lower()
+    return any(m in a for m in NO_ANSWER_MARKERS)
+
+
+def _handle_question(question: str, say, user_id: str = None, source: str = "dm", thread_ts=None):
     """Look up an answer and post it."""
     question = question.strip()
     if not question:
@@ -96,6 +112,12 @@ def _handle_question(question: str, say, thread_ts=None):
     except Exception as e:
         logger.error(f"Q&A error: {e}")
         answer = "Sorry, I ran into an error searching the newsletters. Please try again."
+
+    # Record for the weekly admin digest (never let logging break the reply)
+    try:
+        db.log_qa(user_id, source, question, answer, not _is_no_answer(answer))
+    except Exception as e:
+        logger.error(f"Failed to log Q&A: {e}")
 
     # Update the thinking message with the actual answer
     try:
@@ -153,7 +175,7 @@ def handle_mention(event, say):
     question = MENTION_PATTERN.sub("", text).strip()
     # Post as a regular top-level message rather than a thread reply — more
     # obvious for less Slack-savvy users than a reply tucked into a thread.
-    _handle_question(question, say)
+    _handle_question(question, say, user_id=event.get("user"), source="mention")
 
 
 @app.event("message")
@@ -179,7 +201,71 @@ def handle_message(event, say):
     if ADD_PATTERN.match(question):
         _handle_add_command(question, event.get("user", ""), say)
     else:
-        _handle_question(question, say)
+        _handle_question(question, say, user_id=event.get("user"), source="dm")
+
+
+# ---------------------------------------------------------------------------
+# Weekly Q&A digest (admin-only)
+# ---------------------------------------------------------------------------
+
+def _display_name(user_id: str, cache: dict) -> str:
+    if not user_id:
+        return "Unknown"
+    if user_id not in cache:
+        try:
+            p = app.client.users_info(user=user_id)["user"]
+            cache[user_id] = (p.get("real_name")
+                              or p.get("profile", {}).get("display_name")
+                              or p.get("name") or user_id)
+        except Exception:
+            cache[user_id] = user_id
+    return cache[user_id]
+
+
+def send_weekly_digest():
+    """DM each admin a summary of the questions asked in the last 7 days, with
+    the ones the bot couldn't answer called out as likely info gaps."""
+    if not ADMIN_SLACK_USER_IDS:
+        logger.info("Weekly digest skipped — no ADMIN_SLACK_USER_IDS configured")
+        return
+
+    end = datetime.utcnow()
+    start = end - timedelta(days=7)
+    rows = db.get_qa_between(start, end)
+    names: dict = {}
+
+    gaps = [r for r in rows if not r["answered"]]
+    label = f"{start.strftime('%b %d').lstrip('0')}–{end.strftime('%b %d').lstrip('0')}"
+    lines = [
+        f":bar_chart: *beatBot — questions this week* ({label})",
+        f"*{len(rows)}* question{'s' if len(rows) != 1 else ''} asked"
+        + (f" · :warning: *{len(gaps)}* the bot couldn't answer" if gaps else ""),
+    ]
+
+    if gaps:
+        lines.append("\n:warning: *Couldn't answer — likely info gaps:*")
+        for r in gaps:
+            lines.append(f"• \"{r['question']}\" — _{_display_name(r['user_id'], names)}_")
+
+    if rows:
+        lines.append("\n*All questions:*")
+        for r in rows[:60]:
+            when = datetime.fromisoformat(r["asked_at"]).strftime("%a")
+            flag = "" if r["answered"] else " :warning:"
+            lines.append(f"• \"{r['question']}\" — _{_display_name(r['user_id'], names)}_ ({when}){flag}")
+        if len(rows) > 60:
+            lines.append(f"_…and {len(rows) - 60} more._")
+    else:
+        lines.append("\n_No questions were asked this week._")
+
+    text = "\n".join(lines)
+    for admin_id in ADMIN_SLACK_USER_IDS:
+        try:
+            app.client.chat_postMessage(channel=admin_id, text=text)
+        except Exception as e:
+            logger.error(f"Failed to DM weekly digest to {admin_id}: {e}")
+    logger.info(f"Weekly digest sent to {len(ADMIN_SLACK_USER_IDS)} admin(s) "
+                f"({len(rows)} Q&A, {len(gaps)} gaps)")
 
 
 # ---------------------------------------------------------------------------

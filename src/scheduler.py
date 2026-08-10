@@ -5,11 +5,14 @@ fetches the Membership Toolkit page, indexes the content, and announces to Slack
 
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from src import database as db
 from src.calendar_client import fetch_all_events
+from src.config import CALENDAR_TIMEZONE
 from src.gmail_client import GmailClient
 from src.newsletter_parser import fetch_and_parse
 from src.vector_store import VectorStore
@@ -123,6 +126,20 @@ def start_scheduler(poll_interval_minutes: int = 15) -> BackgroundScheduler:
         max_instances=1,  # Prevent overlapping runs
         misfire_grace_time=60,
     )
+
+    # Weekly Q&A digest to admins — Monday 8am local. Local import avoids a
+    # circular import (slack_bot imports get_vector_store from this module).
+    from src.slack_bot import send_weekly_digest
+    scheduler.add_job(
+        send_weekly_digest,
+        trigger=CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=ZoneInfo(CALENDAR_TIMEZONE)),
+        id="weekly_qa_digest",
+        name="Weekly Q&A digest to admins",
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     scheduler.start()
-    logger.info(f"Scheduler started — polling every {poll_interval_minutes} minutes")
+    logger.info(f"Scheduler started — polling every {poll_interval_minutes} minutes; "
+                f"weekly Q&A digest Mondays 8am {CALENDAR_TIMEZONE}")
     return scheduler

@@ -36,8 +36,42 @@ def init_db():
                 value TEXT
             )
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS qa_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                asked_at  TEXT NOT NULL,
+                user_id   TEXT,
+                source    TEXT,
+                question  TEXT,
+                answer    TEXT,
+                answered  INTEGER DEFAULT 1
+            )
+        """)
         con.commit()
     logger.info("Database initialized")
+
+
+def log_qa(user_id: str, source: str, question: str, answer: str, answered: bool):
+    """Record one question/answer for the weekly admin digest."""
+    with _conn() as con:
+        con.execute(
+            """INSERT INTO qa_log (asked_at, user_id, source, question, answer, answered)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (datetime.utcnow().isoformat(), user_id, source, question, answer, 1 if answered else 0),
+        )
+        con.commit()
+
+
+def get_qa_between(start: datetime, end: datetime) -> list[dict]:
+    """Q&A rows with asked_at in [start, end) (naive UTC), oldest first."""
+    with _conn() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """SELECT asked_at, user_id, source, question, answer, answered
+               FROM qa_log WHERE asked_at >= ? AND asked_at < ? ORDER BY asked_at""",
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def is_processed(gmail_id: str) -> bool:
