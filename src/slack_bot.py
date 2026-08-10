@@ -200,6 +200,8 @@ def handle_message(event, say):
     question = raw_text.strip()
     if ADD_PATTERN.match(question):
         _handle_add_command(question, event.get("user", ""), say)
+    elif question.lower() == "digest":
+        _handle_digest_command(event.get("user", ""), say)
     else:
         _handle_question(question, say, user_id=event.get("user"), source="dm")
 
@@ -266,6 +268,21 @@ def send_weekly_digest():
             logger.error(f"Failed to DM weekly digest to {admin_id}: {e}")
     logger.info(f"Weekly digest sent to {len(ADMIN_SLACK_USER_IDS)} admin(s) "
                 f"({len(rows)} Q&A, {len(gaps)} gaps)")
+
+
+def _handle_digest_command(user_id: str, say):
+    """Admin-only: DM `digest` to get this week's Q&A summary on demand
+    (the same report the weekly job sends). Runs inside the live app, so no
+    Railway shell needed."""
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        say("Sorry, only the bot admin can pull the Q&A digest.")
+        return
+    say(":hourglass_flowing_sand: Building the last 7 days of Q&A…")
+    try:
+        send_weekly_digest()
+    except Exception as e:
+        logger.error(f"Manual digest failed: {e}")
+        say("Sorry, I couldn't build the digest — check the logs.")
 
 
 # ---------------------------------------------------------------------------
