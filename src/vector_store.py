@@ -482,7 +482,8 @@ class VectorStore:
             if key in sources_seen:
                 subject = meta.get("subject", "Newsletter")
                 url = meta.get("url", "")
-                source_lines.append(f"• {subject} — <{url}|View>" if url else f"• {subject}")
+                label = "*[FAQ]* " if meta.get("source") == "faq" else ""
+                source_lines.append(f"• {label}{subject} — <{url}|View>" if url else f"• {label}{subject}")
                 sources_seen.discard(key)
 
         today_str = datetime.now().strftime("%A, %B %d, %Y")
