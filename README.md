@@ -82,7 +82,7 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 - In Slack, right-click the channel → View channel details → scroll to bottom → Copy channel ID (`C0XXXXXXXXX`) → `SLACK_ANNOUNCE_CHANNEL`
 - Make sure to **invite the bot** to that channel: `/invite @BandNewsletterBot`
 
-**Get your Slack user ID** (for `ADMIN_SLACK_USER_IDS`, see [Usage](#adding-ad-hoc-notes) below):
+**Get your Slack user ID** (for `ADMIN_SLACK_USER_IDS`, see [Usage](#adding-faq-entries) below):
 - Click your profile picture → View profile → **More** (⋯) → **Copy member ID**
 
 ### 4. Gemini API Key
@@ -153,7 +153,7 @@ Just message the bot directly — no mention needed.
 ### Help
 Send `help` or `?` to the bot.
 
-### Adding ad-hoc notes
+### Adding FAQ entries
 
 For one-off info that isn't in a newsletter or the calendar (an email from a coach, a flyer, a form), any admin listed in `ADMIN_SLACK_USER_IDS` can DM the bot:
 
@@ -164,6 +164,8 @@ All students need $40 cash or check for uniform fitting on Saturday, August 8, 3
 ```
 
 The `url:` line is optional — include it to give the entry a clickable reference link in answers; omit it for something with no link to point to. Re-sending `add:` with the same title overwrites that entry (handy for fixing a typo), rather than creating a duplicate.
+
+To see everything currently in the FAQ list, an admin can DM the bot `list faqs`.
 
 ---
 

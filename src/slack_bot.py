@@ -131,14 +131,14 @@ def _handle_question(question: str, say, user_id: str = None, source: str = "dm"
         say(answer, thread_ts=thread_ts)
 
 
-def _handle_add_command(text: str, user_id: str, say):
+def _handle_add_faq_command(text: str, user_id: str, say):
     """
     Admin-only: DM the bot `add: <title>` on the first line, optionally
     `url: <link>` on the next, then the content on the rest — indexes it
     into the same searchable archive as newsletters and calendar events.
     """
     if user_id not in ADMIN_SLACK_USER_IDS:
-        say("Sorry, only the bot admin can add entries to the knowledge base.")
+        say("Sorry, only the bot admin can add FAQ entries.")
         return
 
     lines = text.split("\n")
@@ -161,11 +161,31 @@ def _handle_add_command(text: str, user_id: str, say):
         )
         return
 
-    chunk_count = get_vector_store().add_manual_entry(title=title, url=url, body=body)
-    confirmation = f":white_check_mark: Added *{title}* to the knowledge base ({chunk_count} chunk(s))."
+    chunk_count = get_vector_store().add_faq_entry(title=title, url=url, body=body)
+    confirmation = f":white_check_mark: Added *{title}* to the FAQ list ({chunk_count} chunk(s))."
     if url:
         confirmation += f"\n<{url}|Reference link>"
     say(confirmation)
+
+
+def _handle_list_faqs_command(user_id: str, say):
+    """Admin-only: DM `list faqs` to see every FAQ entry currently indexed."""
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        say("Sorry, only the bot admin can list FAQ entries.")
+        return
+
+    entries = get_vector_store().list_faq_entries()
+    if not entries:
+        say("No FAQ entries have been added yet. DM `add: Title` to create one.")
+        return
+
+    lines = [f":clipboard: *FAQ entries* ({len(entries)}):"]
+    for e in entries:
+        line = f"• *{e['subject']}* — added {e['date']}"
+        if e["url"]:
+            line += f" — <{e['url']}|link>"
+        lines.append(line)
+    say("\n".join(lines))
 
 
 @app.event("app_mention")
@@ -199,7 +219,9 @@ def handle_message(event, say):
 
     question = raw_text.strip()
     if ADD_PATTERN.match(question):
-        _handle_add_command(question, event.get("user", ""), say)
+        _handle_add_faq_command(question, event.get("user", ""), say)
+    elif question.lower() in ("list faqs", "list faq", "faqs", "faq list"):
+        _handle_list_faqs_command(event.get("user", ""), say)
     elif question.lower() == "digest":
         _handle_digest_command(event.get("user", ""), say)
     else:

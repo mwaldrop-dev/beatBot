@@ -65,7 +65,7 @@ def _parse_email_date(date_str: str) -> Optional[datetime]:
 
 def _parse_stored_date(date_str: str) -> Optional[datetime]:
     """Parse a chunk's stored `date` — newsletters use RFC-2822 email dates,
-    manual notes use "%A, %B %d, %Y" — for recomputing its season on demand."""
+    FAQ entries use "%A, %B %d, %Y" — for recomputing its season on demand."""
     parsed = _parse_email_date(date_str)
     if parsed:
         return parsed
@@ -203,9 +203,9 @@ class VectorStore:
         )
         return len(results["ids"]) > 0
 
-    def add_manual_entry(self, title: str, url: str, body: str) -> int:
+    def add_faq_entry(self, title: str, url: str, body: str) -> int:
         """
-        Index an ad-hoc admin-provided note (e.g. pasted from an email or
+        Index an admin-provided FAQ entry (e.g. pasted from an email or
         flyer) alongside newsletters and calendar events. Keyed by title,
         so re-adding the same title overwrites the old content — the
         expected way to fix a typo'd entry, matching how calendar events
@@ -218,11 +218,11 @@ class VectorStore:
         entry_id = hashlib.sha256(title.strip().lower().encode()).hexdigest()[:16]
         date_str = datetime.now().strftime("%A, %B %d, %Y")
 
-        ids = [f"manual_{entry_id}_{i}" for i in range(len(chunks))]
+        ids = [f"faq_{entry_id}_{i}" for i in range(len(chunks))]
         metadatas = [
             {
-                "source": "manual",
-                "gmail_id": f"manual_{entry_id}",
+                "source": "faq",
+                "gmail_id": f"faq_{entry_id}",
                 "subject": title,
                 "url": url,
                 "date": date_str,
@@ -235,10 +235,24 @@ class VectorStore:
         # Delete-then-add rather than upsert: if a correction has a
         # different chunk count than the original, upserting by index
         # would leave the extra old chunks behind as stale duplicates.
-        self._collection.delete(where={"gmail_id": f"manual_{entry_id}"})
+        self._collection.delete(where={"gmail_id": f"faq_{entry_id}"})
         self._collection.add(ids=ids, documents=chunks, metadatas=metadatas)
-        logger.info(f"Stored {len(chunks)} manual chunk(s): {title!r}")
+        logger.info(f"Stored {len(chunks)} FAQ chunk(s): {title!r}")
         return len(chunks)
+
+    def list_faq_entries(self) -> list[dict]:
+        """One entry per distinct FAQ item (admin-added via `add:`), deduplicated across chunks."""
+        results = self._collection.get(where={"source": "faq"}, include=["metadatas"])
+        seen = {}
+        for meta in results["metadatas"]:
+            key = meta.get("gmail_id", "")
+            if key and key not in seen:
+                seen[key] = {
+                    "subject": meta.get("subject", ""),
+                    "url": meta.get("url", ""),
+                    "date": meta.get("date", ""),
+                }
+        return sorted(seen.values(), key=lambda e: e["subject"].lower())
 
     def sync_calendar_events(self, events: list[CalendarEvent]):
         """
@@ -367,12 +381,12 @@ class VectorStore:
         return [docs[i] for i in order], [metas[i] for i in order]
 
     def retag_seasons(self) -> int:
-        """Recompute season_start_year for stored newsletter/note chunks from
+        """Recompute season_start_year for stored newsletter/FAQ chunks from
         their date, so a change to SEASON_START_MONTH takes effect on data that
         was indexed under the old boundary. Calendar events re-tag themselves on
         the next sync; this covers the ingest-once sources. Returns # updated."""
         got = self._collection.get(
-            where={"source": {"$in": ["newsletter", "manual"]}},
+            where={"source": {"$in": ["newsletter", "faq"]}},
             include=["metadatas"],
         )
         ids = got.get("ids", []) or []
@@ -408,11 +422,12 @@ class VectorStore:
         scope_to_season = not _looks_historical(question)
 
         docs, metas, distances = [], [], []
-        # Newsletters + notes always come from semantic search. The calendar is
-        # special: for a time-scoped question ("next week", "upcoming", "next
-        # game") we pull events by DATE RANGE (embeddings are date-blind), else
-        # fall back to semantic. Windowed events get distance -1 so they lead.
-        for source in ("newsletter", "manual"):
+        # Newsletters + FAQ entries always come from semantic search. The
+        # calendar is special: for a time-scoped question ("next week",
+        # "upcoming", "next game") we pull events by DATE RANGE (embeddings
+        # are date-blind), else fall back to semantic. Windowed events get
+        # distance -1 so they lead.
+        for source in ("newsletter", "faq"):
             d, m, dist = self._query_source(query_embedding, source, current_season, scope_to_season)
             docs.extend(d)
             metas.extend(m)
@@ -450,7 +465,7 @@ class VectorStore:
             date = meta.get("date", "")
             url = meta.get("url", "")
             source_key = meta.get("gmail_id", "")
-            source_label = {"calendar": "Calendar", "manual": "Note"}.get(meta.get("source"), "Newsletter")
+            source_label = {"calendar": "Calendar", "faq": "FAQ"}.get(meta.get("source"), "Newsletter")
 
             context_parts.append(
                 f"[{source_label}: {subject} ({date})]\n{doc}"
@@ -479,7 +494,7 @@ references in the question and excerpts (e.g. "this week", "last year",
 explain this reasoning or mention today's date in your answer; just give
 the resolved answer directly.
 Answer the following question using ONLY the excerpts provided below, which
-come from the newsletter archive, the band calendar, or additional notes.
+come from the newsletter archive, the band calendar, or the admin-added FAQ list.
 Be concise and specific. If the answer isn't in the excerpts, say so honestly.
 If times, dates, or locations are mentioned, highlight them clearly.
 If the calendar and newsletter excerpts describe the same event
