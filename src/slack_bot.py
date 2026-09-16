@@ -10,12 +10,16 @@ Behaviors:
 
 import logging
 import re
+from typing import Optional
+
+import requests
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from datetime import datetime, timedelta
 
 from src.config import SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ANNOUNCE_CHANNEL, ADMIN_SLACK_USER_IDS
+from src.document_extractor import SUPPORTED_EXTENSIONS, extract_text
 from src.vector_store import VectorStore
 from src import database as db
 
@@ -188,6 +192,79 @@ def _handle_list_faqs_command(user_id: str, say):
     say("\n".join(lines))
 
 
+def _download_slack_file(file_info: dict) -> Optional[bytes]:
+    url = file_info.get("url_private")
+    if not url:
+        return None
+    try:
+        resp = requests.get(url, headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}, timeout=30)
+        resp.raise_for_status()
+        return resp.content
+    except requests.RequestException as e:
+        logger.error(f"Failed to download Slack file {file_info.get('name')!r}: {e}")
+        return None
+
+
+def _handle_file_upload(event, say):
+    """
+    Admin-only: DM the bot a file (PDF/DOCX/TXT/MD), optionally with a
+    caption `add: <title>` (and optionally a `url:` line) — extracts the
+    file's text and indexes it as a FAQ entry via the same pipeline as the
+    plain-text `add:` command. Without a caption, the filename (minus
+    extension) is used as the title. Silently ignored for non-admins.
+    """
+    user_id = event.get("user", "")
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        return
+
+    caption = event.get("text", "").strip()
+    caption_title = None
+    caption_url = ""
+    if caption:
+        lines = caption.split("\n")
+        match = ADD_PATTERN.match(lines[0])
+        if match:
+            caption_title = match.group(1).strip()
+            remaining = lines[1:]
+            if remaining:
+                url_match = URL_LINE_PATTERN.match(remaining[0].strip())
+                if url_match:
+                    caption_url = url_match.group(1)
+
+    files = event.get("files", [])
+    multiple = len(files) > 1
+
+    for f in files:
+        filename = f.get("name", "file")
+        filetype = (f.get("filetype") or "").lower()
+        base_name = filename.rsplit(".", 1)[0] if "." in filename else filename
+
+        if filetype not in SUPPORTED_EXTENSIONS:
+            say(f":warning: Skipped *{filename}* — unsupported file type `.{filetype}`. Supported: PDF, DOCX, TXT, MD.")
+            continue
+
+        content = _download_slack_file(f)
+        if content is None:
+            say(f":warning: Couldn't download *{filename}* — please try again.")
+            continue
+
+        text = extract_text(content, filetype)
+        if not text or not text.strip():
+            say(f":warning: Couldn't extract any text from *{filename}* — it may be scanned/image-only.")
+            continue
+
+        title = caption_title or base_name
+        if multiple and caption_title:
+            title = f"{caption_title} — {base_name}"
+        url = caption_url or f.get("permalink", "")
+
+        chunk_count = get_vector_store().add_faq_entry(title=title, url=url, body=text)
+        confirmation = f":white_check_mark: Added *{title}* to the FAQ list from `{filename}` ({chunk_count} chunk(s))."
+        if url:
+            confirmation += f"\n<{url}|Reference link>"
+        say(confirmation)
+
+
 @app.event("app_mention")
 def handle_mention(event, say):
     """User @-mentioned the bot in a channel."""
@@ -205,12 +282,21 @@ def handle_message(event, say):
     explicit @-mention (see handle_mention) — the bot never auto-answers
     un-mentioned messages in a channel.
     """
-    # Ignore bot messages (including our own "thinking..." edits) to avoid loops
-    if event.get("bot_id") or event.get("subtype"):
+    # Ignore bot messages (including our own "thinking..." edits) to avoid
+    # loops. "file_share" is a real user action (an uploaded file) and is
+    # the one subtype we still want to handle below.
+    if event.get("bot_id"):
+        return
+    subtype = event.get("subtype")
+    if subtype and subtype != "file_share":
         return
 
     # Only respond in direct messages; ignore everything else in channels.
     if event.get("channel_type") != "im":
+        return
+
+    if event.get("files"):
+        _handle_file_upload(event, say)
         return
 
     raw_text = event.get("text", "")

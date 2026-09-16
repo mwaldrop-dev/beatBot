@@ -205,11 +205,13 @@ class VectorStore:
 
     def add_faq_entry(self, title: str, url: str, body: str) -> int:
         """
-        Index an admin-provided FAQ entry (e.g. pasted from an email or
-        flyer) alongside newsletters and calendar events. Keyed by title,
-        so re-adding the same title overwrites the old content — the
-        expected way to fix a typo'd entry, matching how calendar events
-        are upserted by identity rather than accumulated as new copies.
+        Index an admin-provided FAQ entry — anything from a short pasted
+        fact to a whole document's worth of text (e.g. an uploaded PDF
+        itinerary or guide) — alongside newsletters and calendar events.
+        Keyed by title, so re-adding the same title overwrites the old
+        content — the expected way to fix a typo'd entry or re-upload a
+        corrected document, matching how calendar events are upserted by
+        identity rather than accumulated as new copies.
         """
         chunks = _chunk_text(body)
         if not chunks:
@@ -236,7 +238,14 @@ class VectorStore:
         # different chunk count than the original, upserting by index
         # would leave the extra old chunks behind as stale duplicates.
         self._collection.delete(where={"gmail_id": f"faq_{entry_id}"})
-        self._collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+        # Gemini's batch embedding endpoint caps at 100 requests per call — a
+        # full document (unlike a short pasted fact) can easily exceed that.
+        for i in range(0, len(ids), EMBED_BATCH_SIZE):
+            self._collection.add(
+                ids=ids[i:i + EMBED_BATCH_SIZE],
+                documents=chunks[i:i + EMBED_BATCH_SIZE],
+                metadatas=metadatas[i:i + EMBED_BATCH_SIZE],
+            )
         logger.info(f"Stored {len(chunks)} FAQ chunk(s): {title!r}")
         return len(chunks)
 

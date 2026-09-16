@@ -66,6 +66,7 @@ This opens a browser, you log in with the Gmail account that receives the newsle
 - `im:history`
 - `im:read`
 - `im:write`
+- `files:read` *(needed to download files an admin uploads for FAQ ingestion — see [Adding FAQ entries](#adding-faq-entries))*
 - `channels:history` *(optional, if you want the bot to read channel messages)*
 
 **Enable Events:**
@@ -164,6 +165,8 @@ All students need $40 cash or check for uniform fitting on Saturday, August 8, 3
 ```
 
 The `url:` line is optional — include it to give the entry a clickable reference link in answers; omit it for something with no link to point to. Re-sending `add:` with the same title overwrites that entry (handy for fixing a typo), rather than creating a duplicate.
+
+**For a whole document** (a newcomer guide, an itinerary), skip retyping it — just upload the file (PDF, DOCX, TXT, or MD) directly in the DM. An `add: Title` caption on the upload works the same as above; without one, the filename becomes the title. Re-uploading with the same title (or the same `add:` caption) replaces the old version.
 
 To see everything currently in the FAQ list, an admin can DM the bot `list faqs`.
 
