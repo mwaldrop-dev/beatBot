@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 from src.config import SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ANNOUNCE_CHANNEL, ADMIN_SLACK_USER_IDS
 from src.document_extractor import SUPPORTED_EXTENSIONS, extract_text
+from src.drive_fetcher import DriveFetchError, fetch_google_document, is_google_drive_url
 from src.vector_store import VectorStore, clean_title
 from src import database as db
 
@@ -193,16 +194,32 @@ def _handle_add_faq_command(text: str, user_id: str, say):
             remaining = remaining[1:]
 
     body = "\n".join(remaining).strip()
+    filename = ""
+    fetched = False
+    if not body and url and is_google_drive_url(url):
+        # Title + a public Drive/Docs link and nothing else: fetch the
+        # document itself and use the same link as its citation link.
+        say(":hourglass_flowing_sand: Fetching that document from Google Drive…")
+        try:
+            body, filename = fetch_google_document(url)
+            fetched = True
+        except DriveFetchError as e:
+            say(f":warning: {e}")
+            return
+
     if not body:
         say(
             "Got a title but no content to add — send `add: Title` on the "
             "first line, optionally `url: <link>` on the next, then the "
-            "details on the following line(s)."
+            "details on the following line(s). Or attach a file, or give a "
+            "public Google Drive / Google Docs link on the `url:` line and "
+            "I'll read the document from it."
         )
         return
 
-    chunk_count = get_vector_store().add_faq_entry(title=title, url=url, body=body)
-    confirmation = f":white_check_mark: Added *{title}* to the FAQ list ({chunk_count} chunk(s))."
+    chunk_count = get_vector_store().add_faq_entry(title=title, url=url, body=body, filename=filename)
+    confirmation = f":white_check_mark: Added *{clean_title(title)}* to the FAQ list ({chunk_count} chunk(s))"
+    confirmation += " from Google Drive." if fetched else "."
     if url:
         confirmation += f"\n<{url}|Reference link>"
     say(confirmation)

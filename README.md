@@ -168,6 +168,15 @@ The `url:` line is optional — include it to give the entry a clickable referen
 
 **For a whole document** (a newcomer guide, an itinerary), skip retyping it — just upload the file (PDF, DOCX, TXT, or MD) directly in the DM. An `add: Title` caption on the upload works the same as above; without one, the filename becomes the title. Re-uploading with the same title (or the same `add:` caption) replaces the old version.
 
+**From a Google Drive link** — skip the upload entirely. Give a title and a public link, with no other text:
+
+```
+add: Ireland Flight Info
+url: https://drive.google.com/file/d/…/view?usp=sharing
+```
+
+The bot downloads the document, indexes it, and uses the same link as the citation. It works for PDF, Word (`.docx`) and plain-text files in Drive and for native Google Docs, up to 25 MB, and only when sharing is set to **Anyone with the link → Viewer** (the bot never signs in to Google). Folders, Sheets and Slides aren't supported. If you also type text under the `url:` line, that text is used and nothing is fetched. To refresh an entry after the document changes, send the same `add:` again.
+
 **Managing entries** (all admin-only, by DM):
 
 | Command | What it does |
