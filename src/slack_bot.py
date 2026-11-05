@@ -34,13 +34,32 @@ MENTION_PATTERN = re.compile(r"<@[A-Z0-9]+>")
 ADD_PATTERN = re.compile(r"^add:\s*(.+)", re.IGNORECASE)
 URL_LINE_PATTERN = re.compile(r"^url:\s*(<[^>]+>|\S+)", re.IGNORECASE)
 LINK_PREFIX_PATTERN = re.compile(r"^link:", re.IGNORECASE)
-LINK_LINE_PATTERN = re.compile(r"^link:\s*(.+?)\s+(<https?://[^>]+>|https?://\S+)\s*$", re.IGNORECASE)
-DELETE_PATTERN = re.compile(r"^delete:\s*(.+)", re.IGNORECASE)
+LINK_LINE_PATTERN = re.compile(r"^link:?\s+(.+?)\s+(<https?://[^>]+>|https?://\S+)\s*$", re.IGNORECASE)
+DELETE_PATTERN = re.compile(r"^delete(?::\s*|\s+)(.+)", re.IGNORECASE)
 
 # Pending `delete:` confirmations: admin user id -> (entry title, expiry time).
 # In-memory on purpose: a restart simply cancels any pending delete.
 _PENDING_DELETES: dict = {}
 DELETE_CONFIRM_TTL_SECONDS = 300
+
+
+def _is_admin_loose_link(text: str, user_id: str) -> bool:
+    """`link Title https://…` without the colon — only treated as a command for
+    an admin and only when the first line really is title + URL, so ordinary
+    questions that happen to start with "link" still go to Q&A."""
+    return (
+        user_id in ADMIN_SLACK_USER_IDS
+        and bool(LINK_LINE_PATTERN.match(text.split("\n")[0].strip()))
+    )
+
+
+def _is_admin_loose_delete(text: str, user_id: str) -> bool:
+    """`delete Title` without the colon — only a command for an admin AND when
+    the title matches an existing FAQ entry; anything else goes to Q&A."""
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        return False
+    match = DELETE_PATTERN.match(text.split("\n")[0].strip())
+    return bool(match) and get_vector_store().get_faq_entry(match.group(1).strip()) is not None
 
 
 def _clean_url(raw: str) -> str:
@@ -391,9 +410,9 @@ def handle_message(event, say):
         _handle_add_faq_command(question, event.get("user", ""), say)
     elif question.lower() in ("list faqs", "list faq", "faqs", "faq list"):
         _handle_list_faqs_command(event.get("user", ""), say)
-    elif LINK_PREFIX_PATTERN.match(question):
+    elif LINK_PREFIX_PATTERN.match(question) or _is_admin_loose_link(question, event.get("user", "")):
         _handle_link_command(question, event.get("user", ""), say)
-    elif DELETE_PATTERN.match(question):
+    elif re.match(r"^delete:", question, re.IGNORECASE) or _is_admin_loose_delete(question, event.get("user", "")):
         _handle_delete_command(question, event.get("user", ""), say)
     elif question.lower() == "confirm delete":
         _handle_confirm_delete_command(event.get("user", ""), say)

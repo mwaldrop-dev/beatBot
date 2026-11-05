@@ -178,7 +178,7 @@ The `url:` line is optional — include it to give the entry a clickable referen
 | `confirm delete` | Carries out a pending delete (expires after 5 minutes) |
 | `add: Title` | Re-adding an existing title overwrites it |
 
-Titles are matched ignoring case, so `link: newcomer guide https://…` works for an entry called "Newcomer Guide". Files uploaded in a DM are only visible to you and the bot, so Slack permalinks to them won't open for other users — give such entries a shareable link (e.g. Google Drive "anyone with the link") via `url:` in the upload caption or the `link:` command.
+For admins the colon is optional on `link` and `delete` (`delete Newcomer Guide` works). Without a colon it only counts as a command when the title matches an existing entry (for `delete`) or the line ends in a URL (for `link`); anything else is treated as a normal question. Titles are matched ignoring case, so `link: newcomer guide https://…` works for an entry called "Newcomer Guide". Files uploaded in a DM are only visible to you and the bot, so Slack permalinks to them won't open for other users — give such entries a shareable link (e.g. Google Drive "anyone with the link") via `url:` in the upload caption or the `link:` command.
 
 ---
 
