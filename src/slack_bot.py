@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 
 from src.config import SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ANNOUNCE_CHANNEL, ADMIN_SLACK_USER_IDS
 from src.document_extractor import SUPPORTED_EXTENSIONS, extract_text
-from src.vector_store import VectorStore
+from src.vector_store import VectorStore, clean_title
 from src import database as db
 
 logger = logging.getLogger(__name__)
@@ -249,9 +249,9 @@ def _handle_link_command(text: str, user_id: str, say):
             continue
         title, url = match.group(1).strip(), _clean_url(match.group(2))
         if get_vector_store().set_faq_url(title, url):
-            results.append(f":white_check_mark: Updated link for *{title}*")
+            results.append(f":white_check_mark: Updated link for *{clean_title(title)}*")
         else:
-            results.append(f":x: No FAQ entry titled *{title}* — DM `list faqs` for exact titles")
+            results.append(f":x: No FAQ entry titled *{clean_title(title)}* — DM `list faqs` for exact titles")
     say("\n".join(results))
 
 
@@ -265,7 +265,7 @@ def _handle_delete_command(text: str, user_id: str, say):
     title = DELETE_PATTERN.match(text.split("\n")[0]).group(1).strip()
     entry = get_vector_store().get_faq_entry(title)
     if not entry:
-        say(f":x: No FAQ entry titled *{title}* — DM `list faqs` for exact titles.")
+        say(f":x: No FAQ entry titled *{clean_title(title)}* — DM `list faqs` for exact titles.")
         return
 
     _PENDING_DELETES[user_id] = (entry["subject"], time.time() + DELETE_CONFIRM_TTL_SECONDS)

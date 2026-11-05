@@ -56,6 +56,13 @@ def _season_start_year(dt: datetime) -> int:
     return dt.year if dt.month >= SEASON_START_MONTH else dt.year - 1
 
 
+def clean_title(title: str) -> str:
+    """Normalise a FAQ title: drop Slack's bold/italic/strike/code marks pasted
+    around it (a title copied from the bold `list faqs` output arrives as
+    `*Title*`) and collapse stray whitespace."""
+    return re.sub(r"\s+", " ", title).strip().strip("*_~`").strip()
+
+
 def _parse_email_date(date_str: str) -> Optional[datetime]:
     try:
         return email.utils.parsedate_to_datetime(date_str)
@@ -206,7 +213,19 @@ class VectorStore:
     @staticmethod
     def _faq_gmail_id(title: str) -> str:
         """Stable id for a FAQ entry, derived from its title (case/whitespace-insensitive)."""
-        return "faq_" + hashlib.sha256(title.strip().lower().encode()).hexdigest()[:16]
+        return "faq_" + hashlib.sha256(clean_title(title).lower().encode()).hexdigest()[:16]
+
+    def _find_faq(self, title: str) -> Optional[tuple]:
+        """Find an existing FAQ entry by title, ignoring case and Slack
+        formatting marks. Matches on the stored title rather than the hashed
+        id, so entries saved earlier with marks in their names are still found.
+        Returns (gmail_id, stored_title) or None."""
+        key = clean_title(title).lower()
+        got = self._collection.get(where={"source": "faq"}, include=["metadatas"])
+        for meta in got["metadatas"]:
+            if clean_title(meta.get("subject", "")).lower() == key:
+                return meta["gmail_id"], meta.get("subject", "")
+        return None
 
     def add_faq_entry(self, title: str, url: str, body: str, filename: str = "") -> int:
         """
@@ -222,7 +241,9 @@ class VectorStore:
         if not chunks:
             return 0
 
-        faq_id = self._faq_gmail_id(title)
+        title = clean_title(title)
+        existing = self._find_faq(title)
+        faq_id = existing[0] if existing else self._faq_gmail_id(title)
         date_str = datetime.now().strftime("%A, %B %d, %Y")
 
         ids = [f"{faq_id}_{i}" for i in range(len(chunks))]
@@ -276,8 +297,10 @@ class VectorStore:
 
     def get_faq_entry(self, title: str) -> Optional[dict]:
         """Look up one FAQ entry by title (None if it doesn't exist)."""
-        faq_id = self._faq_gmail_id(title)
-        got = self._collection.get(where={"gmail_id": faq_id}, include=["metadatas"])
+        found = self._find_faq(title)
+        if not found:
+            return None
+        got = self._collection.get(where={"gmail_id": found[0]}, include=["metadatas"])
         if not got["ids"]:
             return None
         meta = got["metadatas"][0]
@@ -290,9 +313,10 @@ class VectorStore:
     def set_faq_url(self, title: str, url: str) -> bool:
         """Change the citation link on an existing FAQ entry without
         re-indexing it (metadata-only update). Returns False if not found."""
-        got = self._collection.get(
-            where={"gmail_id": self._faq_gmail_id(title)}, include=["metadatas"]
-        )
+        found = self._find_faq(title)
+        if not found:
+            return False
+        got = self._collection.get(where={"gmail_id": found[0]}, include=["metadatas"])
         if not got["ids"]:
             return False
         new_metas = [{**m, "url": url} for m in got["metadatas"]]
@@ -302,7 +326,10 @@ class VectorStore:
 
     def delete_faq_entry(self, title: str) -> int:
         """Remove a FAQ entry and all its chunks. Returns chunks deleted (0 if not found)."""
-        got = self._collection.get(where={"gmail_id": self._faq_gmail_id(title)})
+        found = self._find_faq(title)
+        if not found:
+            return 0
+        got = self._collection.get(where={"gmail_id": found[0]})
         if not got["ids"]:
             return 0
         self._collection.delete(ids=got["ids"])
