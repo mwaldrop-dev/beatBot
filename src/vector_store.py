@@ -203,7 +203,12 @@ class VectorStore:
         )
         return len(results["ids"]) > 0
 
-    def add_faq_entry(self, title: str, url: str, body: str) -> int:
+    @staticmethod
+    def _faq_gmail_id(title: str) -> str:
+        """Stable id for a FAQ entry, derived from its title (case/whitespace-insensitive)."""
+        return "faq_" + hashlib.sha256(title.strip().lower().encode()).hexdigest()[:16]
+
+    def add_faq_entry(self, title: str, url: str, body: str, filename: str = "") -> int:
         """
         Index an admin-provided FAQ entry — anything from a short pasted
         fact to a whole document's worth of text (e.g. an uploaded PDF
@@ -217,16 +222,17 @@ class VectorStore:
         if not chunks:
             return 0
 
-        entry_id = hashlib.sha256(title.strip().lower().encode()).hexdigest()[:16]
+        faq_id = self._faq_gmail_id(title)
         date_str = datetime.now().strftime("%A, %B %d, %Y")
 
-        ids = [f"faq_{entry_id}_{i}" for i in range(len(chunks))]
+        ids = [f"{faq_id}_{i}" for i in range(len(chunks))]
         metadatas = [
             {
                 "source": "faq",
-                "gmail_id": f"faq_{entry_id}",
+                "gmail_id": faq_id,
                 "subject": title,
                 "url": url,
+                "filename": filename,
                 "date": date_str,
                 "chunk_index": i,
                 "season_start_year": _season_start_year(datetime.now()),
@@ -237,7 +243,7 @@ class VectorStore:
         # Delete-then-add rather than upsert: if a correction has a
         # different chunk count than the original, upserting by index
         # would leave the extra old chunks behind as stale duplicates.
-        self._collection.delete(where={"gmail_id": f"faq_{entry_id}"})
+        self._collection.delete(where={"gmail_id": faq_id})
         # Gemini's batch embedding endpoint caps at 100 requests per call — a
         # full document (unlike a short pasted fact) can easily exceed that.
         for i in range(0, len(ids), EMBED_BATCH_SIZE):
@@ -250,18 +256,58 @@ class VectorStore:
         return len(chunks)
 
     def list_faq_entries(self) -> list[dict]:
-        """One entry per distinct FAQ item (admin-added via `add:`), deduplicated across chunks."""
+        """One entry per distinct FAQ item (admin-added), deduplicated across chunks."""
         results = self._collection.get(where={"source": "faq"}, include=["metadatas"])
         seen = {}
         for meta in results["metadatas"]:
             key = meta.get("gmail_id", "")
-            if key and key not in seen:
+            if not key:
+                continue
+            if key not in seen:
                 seen[key] = {
                     "subject": meta.get("subject", ""),
                     "url": meta.get("url", ""),
+                    "filename": meta.get("filename", ""),
                     "date": meta.get("date", ""),
+                    "chunks": 0,
                 }
+            seen[key]["chunks"] += 1
         return sorted(seen.values(), key=lambda e: e["subject"].lower())
+
+    def get_faq_entry(self, title: str) -> Optional[dict]:
+        """Look up one FAQ entry by title (None if it doesn't exist)."""
+        faq_id = self._faq_gmail_id(title)
+        got = self._collection.get(where={"gmail_id": faq_id}, include=["metadatas"])
+        if not got["ids"]:
+            return None
+        meta = got["metadatas"][0]
+        return {
+            "subject": meta.get("subject", title),
+            "url": meta.get("url", ""),
+            "chunks": len(got["ids"]),
+        }
+
+    def set_faq_url(self, title: str, url: str) -> bool:
+        """Change the citation link on an existing FAQ entry without
+        re-indexing it (metadata-only update). Returns False if not found."""
+        got = self._collection.get(
+            where={"gmail_id": self._faq_gmail_id(title)}, include=["metadatas"]
+        )
+        if not got["ids"]:
+            return False
+        new_metas = [{**m, "url": url} for m in got["metadatas"]]
+        self._collection.update(ids=got["ids"], metadatas=new_metas)
+        logger.info(f"Updated link on FAQ entry {title!r}")
+        return True
+
+    def delete_faq_entry(self, title: str) -> int:
+        """Remove a FAQ entry and all its chunks. Returns chunks deleted (0 if not found)."""
+        got = self._collection.get(where={"gmail_id": self._faq_gmail_id(title)})
+        if not got["ids"]:
+            return 0
+        self._collection.delete(ids=got["ids"])
+        logger.info(f"Deleted FAQ entry {title!r} ({len(got['ids'])} chunk(s))")
+        return len(got["ids"])
 
     def sync_calendar_events(self, events: list[CalendarEvent]):
         """

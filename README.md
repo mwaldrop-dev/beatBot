@@ -168,7 +168,17 @@ The `url:` line is optional — include it to give the entry a clickable referen
 
 **For a whole document** (a newcomer guide, an itinerary), skip retyping it — just upload the file (PDF, DOCX, TXT, or MD) directly in the DM. An `add: Title` caption on the upload works the same as above; without one, the filename becomes the title. Re-uploading with the same title (or the same `add:` caption) replaces the old version.
 
-To see everything currently in the FAQ list, an admin can DM the bot `list faqs`.
+**Managing entries** (all admin-only, by DM):
+
+| Command | What it does |
+|---|---|
+| `list faqs` | Every entry with its chunk count, source filename, date added, and link |
+| `link: Title https://…` | Change an entry's citation link without re-uploading. Send several lines in one message to update many at once |
+| `delete: Title` | Asks for confirmation, showing what will be removed |
+| `confirm delete` | Carries out a pending delete (expires after 5 minutes) |
+| `add: Title` | Re-adding an existing title overwrites it |
+
+Titles are matched ignoring case, so `link: newcomer guide https://…` works for an entry called "Newcomer Guide". Files uploaded in a DM are only visible to you and the bot, so Slack permalinks to them won't open for other users — give such entries a shareable link (e.g. Google Drive "anyone with the link") via `url:` in the upload caption or the `link:` command.
 
 ---
 

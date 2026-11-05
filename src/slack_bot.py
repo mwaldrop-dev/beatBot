@@ -10,6 +10,7 @@ Behaviors:
 
 import logging
 import re
+import time
 from typing import Optional
 
 import requests
@@ -31,7 +32,23 @@ _vector_store: VectorStore | None = None
 MENTION_PATTERN = re.compile(r"<@[A-Z0-9]+>")
 
 ADD_PATTERN = re.compile(r"^add:\s*(.+)", re.IGNORECASE)
-URL_LINE_PATTERN = re.compile(r"^url:\s*(\S+)", re.IGNORECASE)
+URL_LINE_PATTERN = re.compile(r"^url:\s*(<[^>]+>|\S+)", re.IGNORECASE)
+LINK_PREFIX_PATTERN = re.compile(r"^link:", re.IGNORECASE)
+LINK_LINE_PATTERN = re.compile(r"^link:\s*(.+?)\s+(<https?://[^>]+>|https?://\S+)\s*$", re.IGNORECASE)
+DELETE_PATTERN = re.compile(r"^delete:\s*(.+)", re.IGNORECASE)
+
+# Pending `delete:` confirmations: admin user id -> (entry title, expiry time).
+# In-memory on purpose: a restart simply cancels any pending delete.
+_PENDING_DELETES: dict = {}
+DELETE_CONFIRM_TTL_SECONDS = 300
+
+
+def _clean_url(raw: str) -> str:
+    """Slack wraps pasted links as <https://x> or <https://x|label> — unwrap to the bare URL."""
+    raw = raw.strip()
+    if raw.startswith("<") and raw.endswith(">"):
+        raw = raw[1:-1]
+    return raw.split("|", 1)[0]
 
 
 def get_vector_store() -> VectorStore:
@@ -153,7 +170,7 @@ def _handle_add_faq_command(text: str, user_id: str, say):
     if remaining:
         url_match = URL_LINE_PATTERN.match(remaining[0].strip())
         if url_match:
-            url = url_match.group(1)
+            url = _clean_url(url_match.group(1))
             remaining = remaining[1:]
 
     body = "\n".join(remaining).strip()
@@ -185,11 +202,77 @@ def _handle_list_faqs_command(user_id: str, say):
 
     lines = [f":clipboard: *FAQ entries* ({len(entries)}):"]
     for e in entries:
-        line = f"• *{e['subject']}* — added {e['date']}"
-        if e["url"]:
-            line += f" — <{e['url']}|link>"
+        line = f"• *{e['subject']}* — {e['chunks']} chunk{'s' if e['chunks'] != 1 else ''}"
+        if e["filename"]:
+            line += f" · from `{e['filename']}`"
+        line += f" · added {e['date']}"
+        line += f" — <{e['url']}|link>" if e["url"] else " — _no link_"
         lines.append(line)
+    lines.append("\n_Manage: `link: Title https://…` · `delete: Title` · `add: Title` (overwrites)_")
     say("\n".join(lines))
+
+
+def _handle_link_command(text: str, user_id: str, say):
+    """Admin-only: update the citation link on existing FAQ entries without
+    re-uploading. One `link: <Title> <url>` per line; several lines allowed."""
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        say("Sorry, only the bot admin can change FAQ links.")
+        return
+
+    results = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = LINK_LINE_PATTERN.match(line)
+        if not match:
+            results.append(f":warning: Couldn't parse `{line}` — expected `link: Title https://…`")
+            continue
+        title, url = match.group(1).strip(), _clean_url(match.group(2))
+        if get_vector_store().set_faq_url(title, url):
+            results.append(f":white_check_mark: Updated link for *{title}*")
+        else:
+            results.append(f":x: No FAQ entry titled *{title}* — DM `list faqs` for exact titles")
+    say("\n".join(results))
+
+
+def _handle_delete_command(text: str, user_id: str, say):
+    """Admin-only, two steps: `delete: <Title>` asks for confirmation (and
+    shows what will be removed); `confirm delete` then carries it out."""
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        say("Sorry, only the bot admin can delete FAQ entries.")
+        return
+
+    title = DELETE_PATTERN.match(text.split("\n")[0]).group(1).strip()
+    entry = get_vector_store().get_faq_entry(title)
+    if not entry:
+        say(f":x: No FAQ entry titled *{title}* — DM `list faqs` for exact titles.")
+        return
+
+    _PENDING_DELETES[user_id] = (entry["subject"], time.time() + DELETE_CONFIRM_TTL_SECONDS)
+    say(
+        f":warning: This will permanently delete *{entry['subject']}* "
+        f"({entry['chunks']} chunk{'s' if entry['chunks'] != 1 else ''}). "
+        "Reply `confirm delete` within 5 minutes to proceed — or ignore this to cancel."
+    )
+
+
+def _handle_confirm_delete_command(user_id: str, say):
+    if user_id not in ADMIN_SLACK_USER_IDS:
+        say("Sorry, only the bot admin can delete FAQ entries.")
+        return
+
+    pending = _PENDING_DELETES.pop(user_id, None)
+    if not pending or time.time() > pending[1]:
+        say("Nothing is waiting for confirmation (or it expired) — DM `delete: Title` first.")
+        return
+
+    title = pending[0]
+    deleted = get_vector_store().delete_faq_entry(title)
+    if deleted:
+        say(f":wastebasket: Deleted *{title}* ({deleted} chunk{'s' if deleted != 1 else ''}).")
+    else:
+        say(f":x: *{title}* was already gone.")
 
 
 def _download_slack_file(file_info: dict) -> Optional[bytes]:
@@ -229,7 +312,7 @@ def _handle_file_upload(event, say):
             if remaining:
                 url_match = URL_LINE_PATTERN.match(remaining[0].strip())
                 if url_match:
-                    caption_url = url_match.group(1)
+                    caption_url = _clean_url(url_match.group(1))
 
     files = event.get("files", [])
     multiple = len(files) > 1
@@ -258,7 +341,7 @@ def _handle_file_upload(event, say):
             title = f"{caption_title} — {base_name}"
         url = caption_url or f.get("permalink", "")
 
-        chunk_count = get_vector_store().add_faq_entry(title=title, url=url, body=text)
+        chunk_count = get_vector_store().add_faq_entry(title=title, url=url, body=text, filename=filename)
         confirmation = f":white_check_mark: Added *{title}* to the FAQ list from `{filename}` ({chunk_count} chunk(s))."
         if url:
             confirmation += f"\n<{url}|Reference link>"
@@ -308,6 +391,12 @@ def handle_message(event, say):
         _handle_add_faq_command(question, event.get("user", ""), say)
     elif question.lower() in ("list faqs", "list faq", "faqs", "faq list"):
         _handle_list_faqs_command(event.get("user", ""), say)
+    elif LINK_PREFIX_PATTERN.match(question):
+        _handle_link_command(question, event.get("user", ""), say)
+    elif DELETE_PATTERN.match(question):
+        _handle_delete_command(question, event.get("user", ""), say)
+    elif question.lower() == "confirm delete":
+        _handle_confirm_delete_command(event.get("user", ""), say)
     elif question.lower() == "digest":
         _handle_digest_command(event.get("user", ""), say)
     else:
